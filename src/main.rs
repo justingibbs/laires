@@ -1,0 +1,24 @@
+mod cli;
+mod concepts;
+mod config;
+mod error;
+mod sync;
+
+use clap::Parser;
+use cli::Cli;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // Load .env from current dir (or parents), silently ignore if missing
+    dotenvy::dotenv().ok();
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
+    let cli = Cli::parse();
+    cli::run(cli).await
+}

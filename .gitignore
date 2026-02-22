@@ -1,0 +1,6 @@
+/target
+.env
+.claude/settings.local.json
+
+.laires/cache/
+.laires/chat_history.json

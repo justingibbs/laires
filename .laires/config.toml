@@ -1,0 +1,16 @@
+[llm]
+provider = "gemini"
+model = "gemini-2.5-flash"
+api_key_env = "GEMINI_API_KEY"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+
+[project]
+title = "My Novel"
+format = "prose"
+
+[analysis]
+debounce_ms = 2000
+auto_scan = true
+
+[privacy]
+restricted_when_cloud = []
