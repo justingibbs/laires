@@ -1,7 +1,9 @@
 mod chat;
+pub(crate) mod diff;
 mod graph;
 mod init;
 mod lint;
+mod log;
 mod perspective;
 mod scan;
 mod status;
@@ -36,6 +38,10 @@ enum Commands {
         /// Re-analyze only a specific scene (by number)
         #[arg(long)]
         scene: Option<usize>,
+
+        /// Re-classify and re-analyze all files from scratch
+        #[arg(long)]
+        full: bool,
     },
 
     /// Print narrative graph summary
@@ -65,6 +71,20 @@ enum Commands {
     /// Open the TUI (split-pane chat + canvas)
     Open,
 
+    /// Show graph changes since last commit
+    Diff,
+
+    /// Show commit history with graph change summaries
+    Log {
+        /// Number of commits to show
+        #[arg(short = 'n', long, default_value = "10")]
+        count: usize,
+
+        /// Show detailed per-node changes
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
     /// Generate character perspective analysis
     Perspective {
         /// Character name
@@ -89,8 +109,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Commands::Init { title, fountain } => {
             init::run(&title, fountain)?;
         }
-        Commands::Scan { scene } => {
-            scan::run(scene).await?;
+        Commands::Scan { scene, full } => {
+            scan::run(scene, full).await?;
         }
         Commands::Graph { character, json } => {
             graph::run(character.as_deref(), json)?;
@@ -100,6 +120,12 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         }
         Commands::Lint => {
             lint::run()?;
+        }
+        Commands::Diff => {
+            diff::run()?;
+        }
+        Commands::Log { count, verbose } => {
+            log::run(count, verbose)?;
         }
         Commands::Chat { new_session } => {
             chat::run(new_session).await?;

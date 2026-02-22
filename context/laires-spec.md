@@ -6,7 +6,7 @@
 
 ## Product Summary
 
-Laires.ai is a CLI/TUI agentic writing tool that treats fiction manuscripts like codebases. It builds a narrative graph — a structured model of characters, objectives, conflicts, and scenes — from a writer's story file. An LLM agent uses this graph alongside targeted text retrieval to provide structural analysis, perspective interpretation, consistency checking, and co-writing assistance.
+Laires.ai is a CLI/TUI agentic writing tool that treats fiction manuscripts like codebases. It works with whatever files the author has in their project folder — any mix of `.md`, `.fountain`, `.docx`, `.txt` — and builds a narrative graph: a structured model of characters, objectives, conflicts, and scenes spanning all story files. An LLM agent uses this graph alongside targeted text retrieval to provide structural analysis, perspective interpretation, consistency checking, and co-writing assistance.
 
 The system is architected using the **Concept & Synchronization** pattern (Jackson & Meng, MIT CSAIL). Each piece of functionality is encapsulated as an independent concept with its own state, actions, and invariants. Concepts never call each other directly. All cross-concept coordination is expressed through explicit synchronizations — declarative rules that define exactly how concepts interact. The DSL definitions are authoritative; pseudocode accompanies each for human readability.
 
@@ -19,16 +19,16 @@ The system is architected using the **Concept & Synchronization** pattern (Jacks
 | Product name | Laires.ai |
 | Architecture pattern | Concept & Synchronization (Jackson & Meng) |
 | Language | Rust |
-| Canonical file format | Markdown (single story file per project) |
+| File format support | Multi-format: .md, .fountain, .docx, .txt — files read and edited in place |
 | Screenplay support | Must-have at launch via Fountain (.fountain) |
-| File structure | Single story file; scenes derived and mapped automatically |
+| File structure | Multi-file projects; files classified by LLM and tracked in manifest.toml |
 | Graph construction | Fully LLM-generated; writer can override with declared values |
 | Graph updates | Automatic on file change; incremental via rope + scene map |
 | Version control | Support both Git and JJ |
 | TUI layout | Chat + Canvas split pane; graph/tools as overlays |
 | LLM context strategy | Send graph as structured context + retrieve relevant scenes |
 | Privacy | Clear cloud vs local indicator in status bar |
-| Export formats | Markdown (native), docx (Phase 2) |
+| Export formats | Deferred; multi-file reading and editing is the priority |
 | Export metadata | Clean output only — no graph metadata in exports |
 | Collaborative writing | Single author at launch |
 | Character conversation mode | Deferred to later phase |
@@ -44,7 +44,7 @@ The system is composed of ten independent concepts. Each concept is defined with
 
 ### Concept 1: TextBuffer
 
-**Purpose**: Owns the raw text of the story file. A rope data structure supporting efficient insertions, deletions, and range reads. Knows nothing about scenes, characters, or narrative. Single source of truth for "what does the text say right now."
+**Purpose**: Owns the raw text of a single file. A rope data structure supporting efficient insertions, deletions, and range reads. Knows nothing about scenes, characters, or narrative. Single source of truth for "what does the text say right now." In a multi-file project, a `FileBufferManager` coordinates multiple TextBuffer instances — one per file tracked in the manifest.
 
 #### DSL Definition
 
@@ -110,13 +110,15 @@ concept TextBuffer
 
 #### Pseudocode
 
-TextBuffer holds the manuscript text in a rope (via the `ropey` crate). When text is inserted, deleted, or replaced, the change is recorded in a change log with the affected byte range. The `dirty` flag tracks whether unsaved changes exist. `save()` writes to disk and clears the flag. `checkpoint()` returns all accumulated changes since the last checkpoint and resets the log — this is how other concepts (via synchronization) learn what changed. TextBuffer knows nothing about scenes, characters, or narrative structure.
+TextBuffer holds a single file's text in a rope (via the `ropey` crate). When text is inserted, deleted, or replaced, the change is recorded in a change log with the affected byte range. The `dirty` flag tracks whether unsaved changes exist. `save()` writes to disk and clears the flag. `checkpoint()` returns all accumulated changes since the last checkpoint and resets the log — this is how other concepts (via synchronization) learn what changed. TextBuffer knows nothing about scenes, characters, or narrative structure.
+
+In a multi-file project, the `FileBufferManager` wraps multiple TextBuffer instances (one per story file in the manifest). It provides aggregate operations like searching across all buffers and routing edits to the correct buffer by file path. The FileBufferManager is a coordination layer, not a concept — it delegates all text operations to the underlying TextBuffers.
 
 ---
 
 ### Concept 2: SceneMap
 
-**Purpose**: Answers "where are the scenes in this text?" Maintains an ordered index of scene boundaries as byte-range spans. Knows about scene detection heuristics (horizontal rules, headings, Fountain scene headings) but knows nothing about characters, objectives, or meaning.
+**Purpose**: Answers "where are the scenes in this text?" Maintains an ordered index of scene boundaries as byte-range spans across all story files. Knows about scene detection heuristics (horizontal rules, headings, Fountain scene headings) but knows nothing about characters, objectives, or meaning. Each scene span includes a file path so byte offsets are unambiguous.
 
 #### DSL Definition
 
@@ -129,36 +131,39 @@ concept SceneMap
 
   type SceneSpan
     id: SceneId
-    start: ByteOffset
-    end: ByteOffset
+    file_path: Path                     -- which file this scene belongs to
+    start: ByteOffset                   -- byte offset within that file
+    end: ByteOffset                     -- byte offset within that file
     content_hash: Hash                  -- for change detection
     title: Option<String>               -- extracted scene title if detectable
 
-  action full_reindex(text: String)
-    -- rebuilds all scene boundaries from scratch
+  action full_reindex(file_path: Path, text: String)
+    -- rebuilds all scene boundaries for this file from scratch
     -- computes content_hash for each scene
-    post: scenes.spans_cover(0, text.length)
-          scenes.non_overlapping = true
-          pending_reindex = all scene ids
+    -- each scene's file_path is set to file_path
+    post: scenes_in(file_path).spans_cover(0, text.length)
+          scenes_in(file_path).non_overlapping = true
+          scenes_in(file_path).ids all in pending_reindex
 
-  action reindex(text: String, changed_ranges: List<ByteRange>)
-    -- incrementally updates scene boundaries affected by changes
+  action reindex(file_path: Path, text: String, changed_ranges: List<ByteRange>)
+    -- incrementally updates scene boundaries affected by changes in this file
     -- recomputes content_hash for affected scenes
     -- adds affected scenes to pending_reindex
-    post: scenes.spans_cover(0, text.length)
-          scenes.non_overlapping = true
+    post: scenes_in(file_path).spans_cover(0, text.length)
+          scenes_in(file_path).non_overlapping = true
           forall s in affected_scenes: s in pending_reindex
 
   action get_scene(id: SceneId) -> SceneSpan
     pre: id in scenes
 
-  action get_scene_at(offset: ByteOffset) -> SceneSpan
-    -- returns the scene containing this byte offset
+  action get_scene_at(file_path: Path, offset: ByteOffset) -> SceneSpan
+    -- returns the scene containing this byte offset in the given file
     pre: offset <= text.length
-    post: result.start <= offset < result.end
+    post: result.start <= offset < result.end and result.file_path = file_path
 
   action list_scenes() -> List<SceneSpan>
-    -- returns all scenes in document order
+    -- returns all scenes across all files in narrative order
+    -- ordering: by file order (from manifest), then by byte offset within each file
 
   action mark_analyzed(id: SceneId)
     -- removes scene from pending_reindex queue
@@ -174,7 +179,11 @@ concept SceneMap
 
 #### Pseudocode
 
-SceneMap maintains an ordered list of SceneSpan entries, each mapping a scene ID to a byte range in the document. In Fountain mode, scene boundaries are detected deterministically from `INT.`/`EXT.` headings. In prose mode, boundaries come from horizontal rules (`---`), Markdown headings, or HTML comment markers (`<!-- scene: "title" -->`); ambiguous cases may require LLM assistance during initial analysis. When `reindex` is called with a list of changed byte ranges, only the scenes overlapping those ranges are re-detected. Each scene's content_hash is recalculated — if it differs from the previous hash, the scene is added to `pending_reindex`, signaling that its narrative analysis is stale. The invariant guarantees complete, non-overlapping coverage: every byte in the document belongs to exactly one scene.
+SceneMap maintains an ordered list of SceneSpan entries, each mapping a scene ID to a file path and byte range within that file. Each SceneSpan knows which file it belongs to, making byte offsets unambiguous across a multi-file project. Scene ordering across files is determined by the file ordering in the manifest (see File Discovery & Classification section).
+
+In Fountain mode, scene boundaries are detected deterministically from `INT.`/`EXT.` headings. In prose mode, boundaries come from horizontal rules (`---`), Markdown headings, or HTML comment markers (`<!-- scene: "title" -->`); ambiguous cases may require LLM assistance during initial analysis. The parse mode can vary per file (e.g., Act1.md in prose mode, Act2.fountain in Fountain mode).
+
+When `reindex` is called with a file path and a list of changed byte ranges, only the scenes in that file overlapping those ranges are re-detected. Each scene's content_hash is recalculated — if it differs from the previous hash, the scene is added to `pending_reindex`, signaling that its narrative analysis is stale. The invariant guarantees complete, non-overlapping coverage within each file: every byte in a story file belongs to exactly one scene.
 
 ---
 
@@ -194,7 +203,7 @@ concept NarrativeGraph
     | Objective { id: ObjectiveId, character_id: CharacterId, scope: Scope, 
                   description: String, evidence: List<String>, confidence: Float,
                   status: Status }
-    | Scene { id: SceneId, title: Option<String>, summary: String, 
+    | Scene { id: SceneId, file_path: Path, title: Option<String>, summary: String,
               characters_present: List<CharacterId>, location: Option<String>, time: Option<String> }
     | Conflict { id: ConflictId, description: String, objectives: List<ObjectiveId> }
 
@@ -559,11 +568,13 @@ Skills is the tool registry. Every capability the agent can invoke — `story_gr
 
 | Skill | Description | Reads From | Writes To |
 |-------|-------------|------------|-----------|
-| `story_grep` | Search story text by regex or keyword | TextBuffer | — |
-| `read_scene` | Read full text of a specific scene | TextBuffer, SceneMap | — |
-| `read_range` | Read a line/byte range from the story | TextBuffer | — |
-| `list_scenes` | List all scenes with metadata | SceneMap | — |
-| `story_stats` | Overall manuscript statistics | TextBuffer, SceneMap | — |
+| `story_grep` | Search story text by regex or keyword across all story files | TextBuffer (all) | — |
+| `read_scene` | Read full text of a specific scene (from any file) | TextBuffer, SceneMap | — |
+| `read_range` | Read a line/byte range from a specific file | TextBuffer | — |
+| `list_scenes` | List all scenes across all story files with metadata | SceneMap | — |
+| `story_stats` | Overall manuscript statistics (aggregated across all files) | TextBuffer (all), SceneMap | — |
+| `read_context_file` | Read a supporting file (outline, characters, notes) | Manifest, disk | — |
+| `list_files` | List all files in the manifest with roles and metadata | Manifest | — |
 
 **Graph Tools**
 
@@ -812,10 +823,10 @@ sync text_to_scenes
   or TextBuffer.replace(range, text):
     let changes = TextBuffer.checkpoint()
     let full_text = TextBuffer.read_all()
-    SceneMap.reindex(full_text, changes.ranges)
+    SceneMap.reindex(TextBuffer.file_path, full_text, changes.ranges)
 ```
 
-**Pseudocode**: When any edit occurs in TextBuffer (insert, delete, replace), checkpoint the accumulated changes, read the full text, and trigger SceneMap to reindex the affected byte ranges. This identifies which scenes were modified.
+**Pseudocode**: When any edit occurs in a TextBuffer (insert, delete, replace), checkpoint the accumulated changes, read the full text, and trigger SceneMap to reindex the affected byte ranges for that file. The file_path is passed so SceneMap knows which file's scenes to update. This identifies which scenes were modified.
 
 #### S1.2: SceneMap.reindex → Analysis.enqueue
 
@@ -1182,11 +1193,18 @@ sync staleness_guard
 
 ```
 my-novel/
-├── story.md                    # the manuscript (single file)
+├── Act1-TheDescent.md          # story file (prose)
+├── Act2-TheReckoning.md        # story file (prose)
+├── Act3-TheReturn.fountain     # story file (Fountain screenplay)
+├── outline.md                  # supporting file (outline)
+├── characters.md               # supporting file (character sheets)
+├── world-notes.md              # supporting file (notes)
+├── outline-v1.md               # excluded (older version, detected by LLM)
 ├── .laires/
 │   ├── config.toml             # project configuration
+│   ├── manifest.toml           # file classification, ordering, and roles (see below)
 │   ├── graph.json              # narrative graph (derived, S6.1)
-│   ├── scenes.json             # scene map with byte offsets (derived, S6.2)
+│   ├── scenes.json             # scene map with file paths + byte offsets (derived, S6.2)
 │   ├── overrides.json          # writer-declared overrides (S6.3)
 │   ├── cache/
 │   │   ├── scene_hashes.json   # content hashes for change detection
@@ -1195,6 +1213,60 @@ my-novel/
 ├── .git/ or .jj/               # version control (optional)
 └── .gitignore                  # includes .laires/cache/
 ```
+
+### Manifest Structure
+
+The manifest (`.laires/manifest.toml`) is generated by `laires scan` during file discovery and classification. It records which files are part of the project, their roles, formats, ordering, and content hashes for change detection.
+
+```toml
+[meta]
+last_scan = "2026-02-21T14:30:00Z"
+classification_model = "claude-haiku-4-5-20251001"  # cheap LLM used for classification
+
+[[story_files]]
+path = "Act1-TheDescent.md"
+format = "prose"
+order = 1
+content_hash = "abc123def456"
+
+[[story_files]]
+path = "Act2-TheReckoning.md"
+format = "prose"
+order = 2
+content_hash = "789ghi012jkl"
+
+[[story_files]]
+path = "Act3-TheReturn.fountain"
+format = "fountain"
+order = 3
+content_hash = "mno345pqr678"
+
+[[context_files]]
+path = "outline.md"
+role = "outline"
+content_hash = "stu901vwx234"
+
+[[context_files]]
+path = "characters.md"
+role = "characters"
+content_hash = "yza567bcd890"
+
+[[context_files]]
+path = "world-notes.md"
+role = "notes"
+content_hash = "efg123hij456"
+
+[[excluded]]
+path = "outline-v1.md"
+reason = "Older version of outline.md"
+```
+
+**File roles:**
+- `story` — Primary narrative files. Included in scene map and narrative graph analysis. Ordered by `order` field for cross-file scene numbering.
+- `outline` — Story outlines. Not scene-mapped, but queryable by the agent via `read_context_file` skill.
+- `characters` — Character sheets or profiles. Queryable by the agent.
+- `notes` — Author's notes, world-building, research. Queryable by the agent.
+- `excluded` — Files detected but excluded from analysis (older versions, unrelated files). Listed with a reason for transparency.
 
 ---
 
@@ -1209,6 +1281,10 @@ model = "claude-sonnet-4-20250514"
 api_key_env = "ANTHROPIC_API_KEY"
 # base_url = "https://api.anthropic.com"   # default for anthropic provider
 
+# Cheap model used for file classification during scan
+[llm.classification]
+model = "claude-haiku-4-5-20251001"        # fast, inexpensive model for file discovery
+
 # Alternative: local model
 # [llm]
 # provider = "local"
@@ -1217,7 +1293,6 @@ api_key_env = "ANTHROPIC_API_KEY"
 
 [project]
 title = "The Long Way Home"
-format = "prose"              # or "fountain"
 
 [analysis]
 debounce_ms = 2000            # wait 2s after last edit before re-analyzing
@@ -1230,23 +1305,24 @@ restricted_when_cloud = []    # skill names to disable when using cloud provider
 canvas_width = 60             # percentage of terminal width for canvas pane
 ```
 
+Note: The `format` field has been removed from `[project]`. File formats are now detected per-file and recorded in the manifest. The manifest (`.laires/manifest.toml`) is generated and maintained by `laires scan` — see File Discovery & Classification.
+
 ---
 
 ## CLI Commands
 
 ```
-laires init                     # initialize a new project in current directory
-laires init --fountain          # initialize as a Fountain/screenplay project
+laires init                     # initialize a new project in current directory (creates .laires/)
 laires open                     # open the TUI (chat + canvas)
-laires scan                     # manually trigger full re-analysis
+laires scan                     # discover/classify new files, re-analyze changed story files
+laires scan --full              # ignore manifest, re-classify and re-analyze everything from scratch
 laires scan --scene 7           # re-analyze a specific scene
 laires graph                    # print narrative graph summary to stdout
 laires graph --character marcus # print a specific character's arc
 laires lint                     # run consistency checks
 laires diff                     # story-aware diff (requires VCS)
-laires export docx              # export to Word document
 laires config                   # open config in editor
-laires status                   # show project status (scenes, characters, last scan)
+laires status                   # show project status (files, scenes, characters, last scan)
 laires skills                   # list registered skills
 laires perspective marcus       # print Marcus's perspective summary
 ```
@@ -1328,6 +1404,68 @@ Graph diffs are computed by comparing `.laires/graph.json` across commits. VCS i
 
 ---
 
+## File Discovery & Classification
+
+When `laires scan` runs, it performs a two-phase process:
+
+### Phase 1: File Discovery & Classification
+
+1. **Walk the project directory** — find all text-like files (`.md`, `.fountain`, `.docx`, `.txt`), excluding `.laires/`, `.git/`, `.jj/`, and other dot-directories.
+
+2. **Check manifest** — if `.laires/manifest.toml` exists, compare discovered files against it:
+   - **New files**: files on disk not in the manifest → classify them.
+   - **Changed files**: files whose content hash differs from manifest → flag for re-analysis.
+   - **Removed files**: files in manifest but no longer on disk → remove from manifest, clean up graph nodes.
+   - **Unchanged files**: skip classification and analysis.
+
+3. **Classify new files via LLM** — send file names and content snippets (first ~500 words of each) to a cheap LLM (e.g., claude-haiku) with a classification prompt. The LLM returns:
+   - **Role**: story, outline, characters, notes, or excluded
+   - **Format**: prose, fountain, or other
+   - **Suggested ordering** for story files (which act/chapter comes first)
+   - **Version grouping**: detects numbered suffixes, draft/final variants, and suggests which files are current vs. older versions
+
+4. **Confirm with user** — present the classification in a human-readable summary:
+   ```
+   Found 7 files in project:
+
+   Story files (in order):
+     1. Act1-TheDescent.md        (prose, 12,340 words)
+     2. Act2-TheReckoning.md      (prose, 15,210 words)
+     3. Act3-TheReturn.fountain   (fountain, 9,870 words)
+
+   Supporting files:
+     - outline.md                 (outline)
+     - characters.md              (character sheets)
+     - world-notes.md             (notes)
+
+   Excluded (older versions):
+     - outline-v1.md              (older version of outline.md)
+
+   Does this look right? [Y/n/edit]
+   ```
+   The user can accept, reclassify individual files, or exclude files.
+
+5. **Save manifest** — write the confirmed classification to `.laires/manifest.toml` with content hashes.
+
+### Phase 2: Scene Analysis
+
+Proceeds with the existing scan logic, but now iterates over all story files in manifest order:
+
+1. For each story file, load into a TextBuffer and run SceneMap with the appropriate parse mode (prose or fountain).
+2. For scenes with changed content hashes, enqueue analysis tasks.
+3. Analysis results update the NarrativeGraph with `file_path` metadata on Scene nodes.
+4. Cross-file narrative edges (e.g., Precedes between the last scene of Act1 and the first scene of Act2) are inferred during analysis.
+
+### `laires scan --full`
+
+Ignores the existing manifest entirely. Re-discovers all files, re-classifies via LLM, re-confirms with user, and re-analyzes all scenes. Useful when the project structure has changed significantly or the manifest is corrupted.
+
+### Supporting Files in Agent Context
+
+Files classified as `outline`, `characters`, or `notes` are not scene-mapped or included in the narrative graph. However, they are listed in the manifest and accessible to the agent via the `read_context_file` skill. This allows the agent to answer questions like "Am I following my outline?" by reading the outline file on demand, without polluting the scene map with non-narrative content.
+
+---
+
 ## Parsers
 
 ### Prose Mode (.md)
@@ -1390,16 +1528,29 @@ Deliverables:
 - All synchronizations operational
 - `laires lint`, `laires status`, `laires perspective` commands
 
-### Phase 3: VCS + Export + Providers
+### Phase 3: Multi-File Projects + Providers
+
+Concepts extended: TextBuffer (FileBufferManager), SceneMap (file-aware), NarrativeGraph (file_path on Scene nodes), Skills (cross-file + context file skills).
+
+New components: Manifest system, LLM-powered file classifier, .docx parser.
 
 Deliverables:
-- Git and JJ integration with story-aware diffing
-- docx export
+- Multi-file project support — any mix of .md, .fountain, .docx, .txt files in the project folder
+- LLM-powered file discovery and classification (story vs. outline vs. notes vs. older versions)
+- Manifest system (`.laires/manifest.toml`) for file roles, ordering, and change detection
+- FileBufferManager coordinating multiple TextBuffer instances
+- Cross-file scene mapping with file-aware SceneMap
+- NarrativeGraph with file_path metadata on Scene nodes
+- `read_context_file` and `list_files` skills for supporting file access
+- .docx file reading (via `docx` crate)
+- `laires scan` two-phase workflow (classify → confirm → analyze)
+- `laires scan --full` for complete re-classification
 - Anthropic and Pydantic AI Gateway provider support
 - Local model support (Ollama, llama.cpp, LM Studio)
+- Git and JJ integration with story-aware diffing
 - File explorer overlay, pacing/arc overlays
 - Custom skill registration (`.laires/skills/`)
-- `laires diff`, `laires export`, `laires skills` commands
+- `laires diff`, `laires skills` commands
 
 ### Phase 4: Tauri GUI (Future)
 
@@ -1427,6 +1578,7 @@ Deliverables:
 | `regex` | Text search patterns | Skills (story_grep) |
 | `grep-regex` + `grep-searcher` | Ripgrep internals | Skills (story_grep) |
 | `similar` | Text diffing | VCS integration |
+| `docx-rs` or `docx` | Read/write .docx files | FileBufferManager (.docx support) |
 | `notify` | File system watcher | TextBuffer auto-reload |
 | `tracing` | Structured logging | All concepts |
 
@@ -1436,7 +1588,7 @@ Deliverables:
 
 Laires.ai succeeds if a fiction writer can:
 
-1. Point it at a manuscript and get a structural map of their story within minutes.
+1. Point it at a folder of story files and get a structural map of their story within minutes.
 2. Ask "where does my protagonist's motivation break down?" and get a scene-specific, structurally-aware answer.
 3. Ask "what does the Jawa see?" and get a perspective-bounded interpretation that respects the character's knowledge limits.
 4. Write in the canvas while chatting with the agent, with both staying in sync — no stale versions, no copy-pasting.

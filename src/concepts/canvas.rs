@@ -160,7 +160,7 @@ mod tests {
         let text = "Line one\nLine two\nLine three\n";
         let text_buffer = TextBuffer::from_str(text, PathBuf::from("/tmp/test.md"));
         let mut scene_map = SceneMap::new(ParseMode::Prose);
-        scene_map.full_reindex(text);
+        scene_map.full_reindex(text, "");
 
         let mut canvas = Canvas::new(10, 80);
         canvas.render(&text_buffer, &scene_map);
@@ -178,7 +178,7 @@ mod tests {
         let text = "## Scene 1\n\nFirst scene with enough words to be a real scene.\n\n## Scene 2\n\nSecond scene with enough words to be a real scene.";
         let text_buffer = TextBuffer::from_str(text, PathBuf::from("/tmp/test.md"));
         let mut scene_map = SceneMap::new(ParseMode::Prose);
-        scene_map.full_reindex(text);
+        scene_map.full_reindex(text, "");
 
         let mut canvas = Canvas::new(20, 80);
         canvas.render(&text_buffer, &scene_map);
@@ -216,7 +216,7 @@ mod tests {
         let text = "## Scene 1\n\nFirst scene with enough words to be a real scene here.\n\n## Scene 2\n\nSecond scene with enough words to be a real scene here.";
         let text_buffer = TextBuffer::from_str(text, PathBuf::from("/tmp/test.md"));
         let mut scene_map = SceneMap::new(ParseMode::Prose);
-        scene_map.full_reindex(text);
+        scene_map.full_reindex(text, "");
 
         let mut canvas = Canvas::new(3, 80);
         canvas.render(&text_buffer, &scene_map);

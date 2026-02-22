@@ -26,7 +26,7 @@ pub fn run() -> anyhow::Result<()> {
         _ => ParseMode::Prose,
     };
     let mut scene_map = SceneMap::new(parse_mode);
-    scene_map.full_reindex(&full_text);
+    scene_map.full_reindex(&full_text, "");
 
     // Load graph
     let graph_path = project_root.join(LAIRES_DIR).join("graph.json");

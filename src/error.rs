@@ -26,6 +26,15 @@ pub enum LairesError {
     #[error("Config error: {0}")]
     Config(String),
 
+    #[error("Manifest error: {0}")]
+    Manifest(String),
+
+    #[error("DOCX extraction error: {0}")]
+    DocxError(String),
+
+    #[error("Custom skill error: {0}")]
+    CustomSkill(String),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 

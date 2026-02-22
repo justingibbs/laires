@@ -15,7 +15,7 @@ pub type NodeId = String;
 
 // -- Node Types --
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum GraphNode {
     Character {
         id: CharacterId,
@@ -39,6 +39,8 @@ pub enum GraphNode {
         characters_present: Vec<CharacterId>,
         location: Option<String>,
         time: Option<String>,
+        #[serde(default)]
+        file_path: String,
     },
     Conflict {
         id: ConflictId,
@@ -85,7 +87,7 @@ pub enum Status {
 
 // -- Edge Types --
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum GraphEdge {
     Pursues {
         scene_id: Option<SceneId>,
@@ -124,7 +126,7 @@ pub struct SerializedGraph {
     pub edges: Vec<SerializedEdge>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SerializedEdge {
     pub from: NodeId,
     pub to: NodeId,
@@ -431,12 +433,14 @@ impl NarrativeGraph {
                 summary,
                 location,
                 time,
+                file_path,
                 ..
             } => match field {
                 "title" => title.clone(),
                 "summary" => Some(summary.clone()),
                 "location" => location.clone(),
                 "time" => time.clone(),
+                "file_path" => Some(file_path.clone()),
                 _ => None,
             },
             GraphNode::Conflict { description, .. } => match field {
@@ -560,11 +564,19 @@ impl NarrativeGraph {
             out.push_str("\nScenes:\n");
             for s in &scenes {
                 if let GraphNode::Scene {
-                    title, summary, ..
+                    title,
+                    summary,
+                    file_path,
+                    ..
                 } = s
                 {
                     let label = title.as_deref().unwrap_or("(untitled)");
-                    out.push_str(&format!("  - {label}: {summary}\n"));
+                    let prefix = if file_path.is_empty() {
+                        String::new()
+                    } else {
+                        format!("[{file_path}] ")
+                    };
+                    out.push_str(&format!("  - {prefix}{label}: {summary}\n"));
                 }
             }
         }
@@ -588,6 +600,244 @@ impl NarrativeGraph {
             self.index_map.insert(node.node_id().to_string(), idx);
         }
     }
+}
+
+// -- Graph Diff --
+
+#[derive(Debug)]
+pub struct GraphDiff {
+    pub added_nodes: Vec<GraphNode>,
+    pub removed_nodes: Vec<GraphNode>,
+    pub changed_nodes: Vec<NodeChange>,
+    pub added_edges: Vec<SerializedEdge>,
+    pub removed_edges: Vec<SerializedEdge>,
+}
+
+#[derive(Debug)]
+pub struct NodeChange {
+    pub id: NodeId,
+    pub old: GraphNode,
+    pub new: GraphNode,
+    pub fields: Vec<String>,
+}
+
+impl GraphDiff {
+    pub fn is_empty(&self) -> bool {
+        self.added_nodes.is_empty()
+            && self.removed_nodes.is_empty()
+            && self.changed_nodes.is_empty()
+            && self.added_edges.is_empty()
+            && self.removed_edges.is_empty()
+    }
+}
+
+/// Compare two graphs and return their differences
+pub fn diff_graphs(old: &NarrativeGraph, new: &NarrativeGraph) -> GraphDiff {
+    let old_ids: HashMap<&str, &GraphNode> = old
+        .graph
+        .node_weights()
+        .map(|n| (n.node_id(), n))
+        .collect();
+    let new_ids: HashMap<&str, &GraphNode> = new
+        .graph
+        .node_weights()
+        .map(|n| (n.node_id(), n))
+        .collect();
+
+    let mut added_nodes = Vec::new();
+    let mut removed_nodes = Vec::new();
+    let mut changed_nodes = Vec::new();
+
+    // Find added and changed nodes
+    for (&id, &new_node) in &new_ids {
+        match old_ids.get(id) {
+            None => added_nodes.push(new_node.clone()),
+            Some(&old_node) => {
+                if old_node != new_node {
+                    let fields = describe_node_changes(old_node, new_node);
+                    changed_nodes.push(NodeChange {
+                        id: id.to_string(),
+                        old: old_node.clone(),
+                        new: new_node.clone(),
+                        fields,
+                    });
+                }
+            }
+        }
+    }
+
+    // Find removed nodes
+    for (&id, &old_node) in &old_ids {
+        if !new_ids.contains_key(id) {
+            removed_nodes.push(old_node.clone());
+        }
+    }
+
+    // Compare edges
+    let old_edges = collect_edges(old);
+    let new_edges = collect_edges(new);
+
+    let added_edges: Vec<SerializedEdge> = new_edges
+        .iter()
+        .filter(|e| !old_edges.contains(e))
+        .cloned()
+        .collect();
+
+    let removed_edges: Vec<SerializedEdge> = old_edges
+        .iter()
+        .filter(|e| !new_edges.contains(e))
+        .cloned()
+        .collect();
+
+    GraphDiff {
+        added_nodes,
+        removed_nodes,
+        changed_nodes,
+        added_edges,
+        removed_edges,
+    }
+}
+
+fn collect_edges(graph: &NarrativeGraph) -> Vec<SerializedEdge> {
+    graph
+        .graph
+        .edge_indices()
+        .filter_map(|ei| {
+            let (from, to) = graph.graph.edge_endpoints(ei)?;
+            let from_node = &graph.graph[from];
+            let to_node = &graph.graph[to];
+            let edge = graph.graph.edge_weight(ei)?;
+            Some(SerializedEdge {
+                from: from_node.node_id().to_string(),
+                to: to_node.node_id().to_string(),
+                edge: edge.clone(),
+            })
+        })
+        .collect()
+}
+
+fn describe_node_changes(old: &GraphNode, new: &GraphNode) -> Vec<String> {
+    let mut changes = Vec::new();
+    match (old, new) {
+        (
+            GraphNode::Character {
+                name: on,
+                description: od,
+                aliases: oa,
+                ..
+            },
+            GraphNode::Character {
+                name: nn,
+                description: nd,
+                aliases: na,
+                ..
+            },
+        ) => {
+            if on != nn {
+                changes.push(format!("name: {on} → {nn}"));
+            }
+            if od != nd {
+                changes.push("description changed".to_string());
+            }
+            if oa != na {
+                changes.push("aliases changed".to_string());
+            }
+        }
+        (
+            GraphNode::Objective {
+                description: od,
+                status: os,
+                confidence: oc,
+                scope: osc,
+                ..
+            },
+            GraphNode::Objective {
+                description: nd,
+                status: ns,
+                confidence: nc,
+                scope: nsc,
+                ..
+            },
+        ) => {
+            if od != nd {
+                changes.push("description changed".to_string());
+            }
+            if os != ns {
+                changes.push(format!("status: {os:?} → {ns:?}"));
+            }
+            if (oc - nc).abs() > f64::EPSILON {
+                changes.push(format!("confidence: {oc:.2} → {nc:.2}"));
+            }
+            if osc != nsc {
+                changes.push(format!("scope: {osc:?} → {nsc:?}"));
+            }
+        }
+        (
+            GraphNode::Scene {
+                title: ot,
+                summary: os,
+                characters_present: ocp,
+                location: ol,
+                time: otm,
+                ..
+            },
+            GraphNode::Scene {
+                title: nt,
+                summary: ns,
+                characters_present: ncp,
+                location: nl,
+                time: ntm,
+                ..
+            },
+        ) => {
+            if ot != nt {
+                changes.push(format!(
+                    "title: {} → {}",
+                    ot.as_deref().unwrap_or("(none)"),
+                    nt.as_deref().unwrap_or("(none)")
+                ));
+            }
+            if os != ns {
+                changes.push("summary changed".to_string());
+            }
+            if ocp != ncp {
+                changes.push("characters_present changed".to_string());
+            }
+            if ol != nl {
+                changes.push("location changed".to_string());
+            }
+            if otm != ntm {
+                changes.push("time changed".to_string());
+            }
+        }
+        (
+            GraphNode::Conflict {
+                description: od,
+                objectives: oo,
+                ..
+            },
+            GraphNode::Conflict {
+                description: nd,
+                objectives: no,
+                ..
+            },
+        ) => {
+            if od != nd {
+                changes.push("description changed".to_string());
+            }
+            if oo != no {
+                changes.push("objectives changed".to_string());
+            }
+        }
+        _ => {
+            changes.push(format!(
+                "type changed: {} → {}",
+                old.node_type_name(),
+                new.node_type_name()
+            ));
+        }
+    }
+    changes
 }
 
 impl Default for NarrativeGraph {
@@ -646,6 +896,7 @@ mod tests {
             characters_present: vec![char_id.clone()],
             location: Some("Great Hall".to_string()),
             time: None,
+            file_path: String::new(),
         });
 
         g.add_edge(&char_id, &scene_id, GraphEdge::PresentIn);
@@ -681,6 +932,7 @@ mod tests {
             characters_present: vec![],
             location: None,
             time: None,
+            file_path: String::new(),
         });
 
         let dead = g.find_dead_scenes();
@@ -708,6 +960,7 @@ mod tests {
             characters_present: vec![char_id.clone()],
             location: None,
             time: None,
+            file_path: String::new(),
         });
 
         let obj_active = new_id();
@@ -788,5 +1041,171 @@ mod tests {
         assert_eq!(g.node_count(), 1);
         g.remove_node(&id);
         assert_eq!(g.node_count(), 0);
+    }
+
+    #[test]
+    fn test_file_path_on_scene_node() {
+        let mut g = NarrativeGraph::new();
+        let scene_id = new_id();
+        g.add_node(GraphNode::Scene {
+            id: scene_id.clone(),
+            title: Some("Opening".to_string()),
+            summary: "The story begins.".to_string(),
+            characters_present: vec![],
+            location: None,
+            time: None,
+            file_path: "chapter-1.md".to_string(),
+        });
+
+        assert_eq!(
+            g.get_node_field(&scene_id, "file_path").unwrap(),
+            "chapter-1.md"
+        );
+    }
+
+    #[test]
+    fn test_diff_graphs_added_nodes() {
+        let old = NarrativeGraph::new();
+        let mut new = NarrativeGraph::new();
+        new.add_node(GraphNode::Character {
+            id: "char-1".to_string(),
+            name: "Alice".to_string(),
+            aliases: vec![],
+            description: None,
+        });
+
+        let diff = diff_graphs(&old, &new);
+        assert_eq!(diff.added_nodes.len(), 1);
+        assert!(diff.removed_nodes.is_empty());
+        assert!(diff.changed_nodes.is_empty());
+    }
+
+    #[test]
+    fn test_diff_graphs_removed_nodes() {
+        let mut old = NarrativeGraph::new();
+        old.add_node(GraphNode::Character {
+            id: "char-1".to_string(),
+            name: "Alice".to_string(),
+            aliases: vec![],
+            description: None,
+        });
+        let new = NarrativeGraph::new();
+
+        let diff = diff_graphs(&old, &new);
+        assert!(diff.added_nodes.is_empty());
+        assert_eq!(diff.removed_nodes.len(), 1);
+        assert!(diff.changed_nodes.is_empty());
+    }
+
+    #[test]
+    fn test_diff_graphs_changed_nodes() {
+        let mut old = NarrativeGraph::new();
+        old.add_node(GraphNode::Objective {
+            id: "obj-1".to_string(),
+            character_id: "char-1".to_string(),
+            scope: Scope::Overarching,
+            description: "Survive".to_string(),
+            evidence: vec![],
+            confidence: 0.9,
+            status: Status::Active,
+        });
+
+        let mut new = NarrativeGraph::new();
+        new.add_node(GraphNode::Objective {
+            id: "obj-1".to_string(),
+            character_id: "char-1".to_string(),
+            scope: Scope::Overarching,
+            description: "Survive".to_string(),
+            evidence: vec![],
+            confidence: 0.9,
+            status: Status::Achieved,
+        });
+
+        let diff = diff_graphs(&old, &new);
+        assert!(diff.added_nodes.is_empty());
+        assert!(diff.removed_nodes.is_empty());
+        assert_eq!(diff.changed_nodes.len(), 1);
+        assert!(diff.changed_nodes[0]
+            .fields
+            .iter()
+            .any(|f| f.contains("status")));
+    }
+
+    #[test]
+    fn test_diff_graphs_edge_changes() {
+        let mut old = NarrativeGraph::new();
+        old.add_node(GraphNode::Character {
+            id: "c1".to_string(),
+            name: "A".to_string(),
+            aliases: vec![],
+            description: None,
+        });
+        old.add_node(GraphNode::Scene {
+            id: "s1".to_string(),
+            title: None,
+            summary: "test".to_string(),
+            characters_present: vec![],
+            location: None,
+            time: None,
+            file_path: String::new(),
+        });
+        old.add_edge("c1", "s1", GraphEdge::PresentIn);
+
+        let mut new = NarrativeGraph::new();
+        new.add_node(GraphNode::Character {
+            id: "c1".to_string(),
+            name: "A".to_string(),
+            aliases: vec![],
+            description: None,
+        });
+        new.add_node(GraphNode::Scene {
+            id: "s1".to_string(),
+            title: None,
+            summary: "test".to_string(),
+            characters_present: vec![],
+            location: None,
+            time: None,
+            file_path: String::new(),
+        });
+        // Edge removed, new edge added
+        new.add_edge("s1", "c1", GraphEdge::Advances);
+
+        let diff = diff_graphs(&old, &new);
+        assert_eq!(diff.added_edges.len(), 1);
+        assert_eq!(diff.removed_edges.len(), 1);
+    }
+
+    #[test]
+    fn test_diff_graphs_empty() {
+        let g1 = NarrativeGraph::new();
+        let g2 = NarrativeGraph::new();
+        let diff = diff_graphs(&g1, &g2);
+        assert!(diff.is_empty());
+    }
+
+    #[test]
+    fn test_file_path_serde_default() {
+        // Simulate deserializing a graph.json that predates the file_path field
+        let json = serde_json::json!({
+            "nodes": [
+                {
+                    "Scene": {
+                        "id": "scene-old",
+                        "title": "Legacy Scene",
+                        "summary": "From before file_path existed.",
+                        "characters_present": [],
+                        "location": null,
+                        "time": null
+                    }
+                }
+            ],
+            "edges": []
+        });
+
+        let g = NarrativeGraph::deserialize(&json).unwrap();
+        assert_eq!(
+            g.get_node_field("scene-old", "file_path").unwrap(),
+            ""
+        );
     }
 }

@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::LairesError;
@@ -14,6 +16,7 @@ pub struct ProviderConfig {
 pub enum ProviderType {
     OpenAiCompatible,
     Anthropic,
+    PydanticGateway,
     Local,
 }
 
@@ -94,10 +97,51 @@ pub struct Provider {
     client: reqwest::Client,
 }
 
+/// Resolve provider type and base URL from project config strings.
+fn resolve_config(
+    provider_str: &str,
+    explicit_base_url: Option<&str>,
+) -> Result<(ProviderType, String), LairesError> {
+    let provider_type = match provider_str {
+        "anthropic" => ProviderType::Anthropic,
+        "openai-compatible" | "openai" | "gemini" => {
+            ProviderType::OpenAiCompatible
+        }
+        "pydantic-gateway" | "pydantic" => ProviderType::PydanticGateway,
+        "local" => ProviderType::Local,
+        other => {
+            return Err(LairesError::Provider(format!(
+                "Unknown provider type: {other}"
+            )))
+        }
+    };
+
+    let base_url = explicit_base_url
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| match provider_type {
+            ProviderType::Anthropic => {
+                "https://api.anthropic.com".to_string()
+            }
+            ProviderType::OpenAiCompatible => {
+                "https://api.openai.com/v1".to_string()
+            }
+            ProviderType::PydanticGateway => {
+                "http://localhost:8000/v1".to_string()
+            }
+            ProviderType::Local => {
+                "http://localhost:11434/v1".to_string()
+            }
+        });
+
+    Ok((provider_type, base_url))
+}
+
 impl Provider {
     pub fn new(config: ProviderConfig) -> Self {
-        let is_local = matches!(config.provider_type, ProviderType::Local)
-            || config.base_url.contains("localhost")
+        let is_local = matches!(
+            config.provider_type,
+            ProviderType::Local | ProviderType::PydanticGateway
+        ) || config.base_url.contains("localhost")
             || config.base_url.contains("127.0.0.1");
 
         Self {
@@ -113,38 +157,35 @@ impl Provider {
     pub fn from_project_config(
         config: &crate::config::ProjectConfig,
     ) -> Result<Self, LairesError> {
-        let provider_type = match config.llm.provider.as_str() {
-            "anthropic" => ProviderType::Anthropic,
-            "openai-compatible" | "openai" | "gemini" => {
-                ProviderType::OpenAiCompatible
-            }
-            "local" => ProviderType::Local,
-            other => {
-                return Err(LairesError::Provider(format!(
-                    "Unknown provider type: {other}"
-                )))
-            }
-        };
-
-        let base_url = config
-            .llm
-            .base_url
-            .clone()
-            .unwrap_or_else(|| match provider_type {
-                ProviderType::Anthropic => {
-                    "https://api.anthropic.com".to_string()
-                }
-                ProviderType::OpenAiCompatible => {
-                    "https://api.openai.com/v1".to_string()
-                }
-                ProviderType::Local => {
-                    "http://localhost:11434/v1".to_string()
-                }
-            });
+        let (provider_type, base_url) = resolve_config(
+            &config.llm.provider,
+            config.llm.base_url.as_deref(),
+        )?;
 
         let provider_config = ProviderConfig {
             provider_type,
             model: config.llm.model.clone(),
+            base_url,
+            api_key_env: config.llm.api_key_env.clone(),
+        };
+
+        Ok(Self::new(provider_config))
+    }
+
+    /// Create a provider from project config, overriding the model name.
+    /// Uses the same provider type, base URL, and API key as the main config.
+    pub fn from_project_config_with_model(
+        config: &crate::config::ProjectConfig,
+        model: &str,
+    ) -> Result<Self, LairesError> {
+        let (provider_type, base_url) = resolve_config(
+            &config.llm.provider,
+            config.llm.base_url.as_deref(),
+        )?;
+
+        let provider_config = ProviderConfig {
+            provider_type,
+            model: model.to_string(),
             base_url,
             api_key_env: config.llm.api_key_env.clone(),
         };
@@ -172,7 +213,9 @@ impl Provider {
                 self.complete_anthropic(messages, tools, system_prompt)
                     .await
             }
-            ProviderType::OpenAiCompatible | ProviderType::Local => {
+            ProviderType::OpenAiCompatible
+            | ProviderType::PydanticGateway
+            | ProviderType::Local => {
                 self.complete_openai(messages, tools, system_prompt).await
             }
         }
@@ -218,6 +261,7 @@ impl Provider {
 
         let url = format!("{}/v1/messages", self.config.base_url);
 
+        let start = Instant::now();
         let response = self
             .client
             .post(&url)
@@ -228,6 +272,8 @@ impl Provider {
             .send()
             .await
             .map_err(|e| LairesError::Provider(e.to_string()))?;
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+        self.metrics.total_latency_ms += elapsed_ms;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -342,11 +388,14 @@ impl Provider {
             req = req.header("authorization", format!("Bearer {api_key}"));
         }
 
+        let start = Instant::now();
         let response = req
             .json(&body)
             .send()
             .await
             .map_err(|e| LairesError::Provider(e.to_string()))?;
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+        self.metrics.total_latency_ms += elapsed_ms;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -405,6 +454,57 @@ impl Provider {
             tool_calls,
             usage,
         })
+    }
+
+    /// Replace the provider config, recalculating `is_local` and resetting
+    /// connection status. Metrics carry over (session-level tracking).
+    pub fn switch_provider(
+        &mut self,
+        config: &crate::config::ProjectConfig,
+    ) -> Result<(), LairesError> {
+        let (provider_type, base_url) = resolve_config(
+            &config.llm.provider,
+            config.llm.base_url.as_deref(),
+        )?;
+
+        self.config = ProviderConfig {
+            provider_type,
+            model: config.llm.model.clone(),
+            base_url,
+            api_key_env: config.llm.api_key_env.clone(),
+        };
+
+        self.is_local = matches!(
+            self.config.provider_type,
+            ProviderType::Local | ProviderType::PydanticGateway
+        ) || self.config.base_url.contains("localhost")
+            || self.config.base_url.contains("127.0.0.1");
+
+        self.connection_status = ConnectionStatus::Disconnected;
+        Ok(())
+    }
+
+    /// Send a minimal completion to verify the provider is reachable.
+    /// Sets `connection_status` accordingly and returns `true` on success.
+    pub async fn test_connection(&mut self) -> bool {
+        let messages = vec![Message {
+            role: Role::User,
+            content: "Hi".to_string(),
+            tool_calls: None,
+            tool_results: None,
+        }];
+
+        match self.complete(&messages, &[], None).await {
+            Ok(_) => {
+                self.connection_status = ConnectionStatus::Connected;
+                true
+            }
+            Err(e) => {
+                self.connection_status =
+                    ConnectionStatus::Error(e.to_string());
+                false
+            }
+        }
     }
 
     pub fn is_local(&self) -> bool {
@@ -638,6 +738,193 @@ mod tests {
         assert_eq!(result[0]["role"], "assistant");
         let tc = result[0]["tool_calls"].as_array().unwrap();
         assert_eq!(tc[0]["function"]["name"], "query_graph");
+    }
+
+    #[test]
+    fn test_pydantic_gateway_routes_through_openai() {
+        let config = ProviderConfig {
+            provider_type: ProviderType::PydanticGateway,
+            model: "gpt-4".to_string(),
+            base_url: "http://localhost:8000/v1".to_string(),
+            api_key_env: None,
+        };
+        let provider = Provider::new(config);
+        // PydanticGateway should be treated as local
+        assert!(provider.is_local());
+        assert_eq!(
+            provider.config().provider_type,
+            ProviderType::PydanticGateway
+        );
+    }
+
+    #[test]
+    fn test_pydantic_gateway_default_url() {
+        let (pt, url) = resolve_config("pydantic-gateway", None).unwrap();
+        assert_eq!(pt, ProviderType::PydanticGateway);
+        assert_eq!(url, "http://localhost:8000/v1");
+
+        let (pt2, _) = resolve_config("pydantic", None).unwrap();
+        assert_eq!(pt2, ProviderType::PydanticGateway);
+    }
+
+    #[test]
+    fn test_resolve_config_all_providers() {
+        let cases = vec![
+            ("anthropic", ProviderType::Anthropic, "https://api.anthropic.com"),
+            ("openai", ProviderType::OpenAiCompatible, "https://api.openai.com/v1"),
+            ("openai-compatible", ProviderType::OpenAiCompatible, "https://api.openai.com/v1"),
+            ("gemini", ProviderType::OpenAiCompatible, "https://api.openai.com/v1"),
+            ("pydantic-gateway", ProviderType::PydanticGateway, "http://localhost:8000/v1"),
+            ("pydantic", ProviderType::PydanticGateway, "http://localhost:8000/v1"),
+            ("local", ProviderType::Local, "http://localhost:11434/v1"),
+        ];
+
+        for (input, expected_type, expected_url) in cases {
+            let (pt, url) = resolve_config(input, None).unwrap();
+            assert_eq!(pt, expected_type, "provider type mismatch for {input}");
+            assert_eq!(url, expected_url, "base url mismatch for {input}");
+        }
+    }
+
+    #[test]
+    fn test_resolve_config_explicit_url_overrides() {
+        let (_, url) =
+            resolve_config("anthropic", Some("https://custom.api.com")).unwrap();
+        assert_eq!(url, "https://custom.api.com");
+    }
+
+    #[test]
+    fn test_resolve_config_unknown_provider() {
+        let result = resolve_config("unknown-provider", None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_switch_provider_recalculates_is_local() {
+        use crate::config::*;
+
+        // Start with a cloud provider
+        let cloud_config = ProviderConfig {
+            provider_type: ProviderType::Anthropic,
+            model: "claude-3".to_string(),
+            base_url: "https://api.anthropic.com".to_string(),
+            api_key_env: Some("ANTHROPIC_API_KEY".to_string()),
+        };
+        let mut provider = Provider::new(cloud_config);
+        assert!(!provider.is_local());
+
+        // Switch to local
+        let local_project_config = ProjectConfig {
+            llm: LlmConfig {
+                provider: "local".to_string(),
+                model: "llama3".to_string(),
+                api_key_env: None,
+                base_url: None,
+            },
+            project: ProjectMeta {
+                title: "Test".to_string(),
+                format: "prose".to_string(),
+            },
+            analysis: AnalysisConfig::default(),
+            privacy: PrivacyConfig::default(),
+            classification: ClassificationConfig::default(),
+        };
+
+        provider.switch_provider(&local_project_config).unwrap();
+        assert!(provider.is_local());
+        assert_eq!(provider.model_name(), "llama3");
+        assert_eq!(
+            *provider.connection_status(),
+            ConnectionStatus::Disconnected
+        );
+    }
+
+    #[test]
+    fn test_switch_provider_preserves_metrics() {
+        use crate::config::*;
+
+        let config = ProviderConfig {
+            provider_type: ProviderType::Anthropic,
+            model: "claude-3".to_string(),
+            base_url: "https://api.anthropic.com".to_string(),
+            api_key_env: None,
+        };
+        let mut provider = Provider::new(config);
+
+        // Simulate some usage
+        provider.metrics.total_requests = 5;
+        provider.metrics.total_tokens = 1000;
+        provider.metrics.total_latency_ms = 2500;
+
+        let new_project_config = ProjectConfig {
+            llm: LlmConfig {
+                provider: "local".to_string(),
+                model: "llama3".to_string(),
+                api_key_env: None,
+                base_url: None,
+            },
+            project: ProjectMeta {
+                title: "Test".to_string(),
+                format: "prose".to_string(),
+            },
+            analysis: AnalysisConfig::default(),
+            privacy: PrivacyConfig::default(),
+            classification: ClassificationConfig::default(),
+        };
+
+        provider.switch_provider(&new_project_config).unwrap();
+
+        // Metrics should carry over
+        assert_eq!(provider.metrics().total_requests, 5);
+        assert_eq!(provider.metrics().total_tokens, 1000);
+        assert_eq!(provider.metrics().total_latency_ms, 2500);
+    }
+
+    #[test]
+    fn test_from_project_config_with_model() {
+        use crate::config::*;
+
+        let project_config = ProjectConfig {
+            llm: LlmConfig {
+                provider: "anthropic".to_string(),
+                model: "claude-sonnet-4-6".to_string(),
+                api_key_env: Some("ANTHROPIC_API_KEY".to_string()),
+                base_url: None,
+            },
+            project: ProjectMeta {
+                title: "Test".to_string(),
+                format: "prose".to_string(),
+            },
+            analysis: AnalysisConfig::default(),
+            privacy: PrivacyConfig::default(),
+            classification: ClassificationConfig::default(),
+        };
+
+        let provider = Provider::from_project_config_with_model(
+            &project_config,
+            "claude-haiku-4-5-20251001",
+        )
+        .unwrap();
+
+        // Model should be overridden
+        assert_eq!(provider.model_name(), "claude-haiku-4-5-20251001");
+        // But provider type should match the project config
+        assert_eq!(
+            provider.config().provider_type,
+            ProviderType::Anthropic
+        );
+    }
+
+    #[test]
+    fn test_latency_tracking_initial_zero() {
+        let config = ProviderConfig {
+            provider_type: ProviderType::Local,
+            model: "test".to_string(),
+            base_url: "http://localhost:11434/v1".to_string(),
+            api_key_env: None,
+        };
+        let provider = Provider::new(config);
+        assert_eq!(provider.metrics().total_latency_ms, 0);
     }
 
     #[test]

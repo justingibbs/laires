@@ -594,6 +594,7 @@ mod tests {
             characters_present: vec![char_a.clone(), char_b.clone()],
             location: None,
             time: None,
+            file_path: String::new(),
         });
 
         g.add_node(GraphNode::Scene {
@@ -603,6 +604,7 @@ mod tests {
             characters_present: vec![char_b.clone()],
             location: None,
             time: None,
+            file_path: String::new(),
         });
 
         g.add_edge(&char_a, &scene_1, GraphEdge::PresentIn);

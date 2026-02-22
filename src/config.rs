@@ -8,6 +8,9 @@ pub const SCENES_FILE: &str = "scenes.json";
 pub const OVERRIDES_FILE: &str = "overrides.json";
 pub const PERSPECTIVES_CACHE_DIR: &str = "cache/perspectives";
 pub const CHAT_HISTORY_FILE: &str = "chat_history.json";
+pub const MANIFEST_FILE: &str = "manifest.toml";
+pub const SKILLS_DIR: &str = "skills";
+pub const SKILL_LOG_FILE: &str = "skill_log.jsonl";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProjectConfig {
@@ -17,6 +20,8 @@ pub struct ProjectConfig {
     pub analysis: AnalysisConfig,
     #[serde(default)]
     pub privacy: PrivacyConfig,
+    #[serde(default)]
+    pub classification: ClassificationConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,6 +76,24 @@ pub struct PrivacyConfig {
     pub restricted_when_cloud: Vec<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ClassificationConfig {
+    #[serde(default = "default_classification_model")]
+    pub model: String,
+}
+
+fn default_classification_model() -> String {
+    "claude-haiku-4-5-20251001".to_string()
+}
+
+impl Default for ClassificationConfig {
+    fn default() -> Self {
+        Self {
+            model: default_classification_model(),
+        }
+    }
+}
+
 impl ProjectConfig {
     pub fn load(project_dir: &Path) -> anyhow::Result<Self> {
         let config_path = project_dir.join(LAIRES_DIR).join(CONFIG_FILE);
@@ -103,6 +126,7 @@ impl ProjectConfig {
             },
             analysis: AnalysisConfig::default(),
             privacy: PrivacyConfig::default(),
+            classification: ClassificationConfig::default(),
         }
     }
 }

@@ -64,9 +64,13 @@ impl TextBuffer {
 
     /// Load text from the file on disk
     pub fn load(&mut self) -> Result<()> {
-        let content = std::fs::read_to_string(&self.file_path).map_err(|_| {
-            LairesError::StoryFileNotFound(self.file_path.display().to_string())
-        })?;
+        let content = if self.file_path.extension().and_then(|e| e.to_str()) == Some("docx") {
+            crate::concepts::docx::extract_text_from_docx(&self.file_path)?
+        } else {
+            std::fs::read_to_string(&self.file_path).map_err(|_| {
+                LairesError::StoryFileNotFound(self.file_path.display().to_string())
+            })?
+        };
         self.rope = Rope::from_str(&content);
         self.dirty = false;
         self.change_log.clear();
@@ -270,5 +274,17 @@ mod tests {
     fn test_invalid_range() {
         let buf = test_buffer("hello");
         assert!(buf.read(ByteRange::new(0, 100)).is_err());
+    }
+
+    #[test]
+    fn test_load_docx_file() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/character_bible.docx");
+        if !path.exists() {
+            eprintln!("Skipping: test file not found at {}", path.display());
+            return;
+        }
+        let buf = TextBuffer::from_file(path).unwrap();
+        assert!(!buf.is_empty(), "docx buffer should not be empty");
+        assert!(buf.word_count() > 100, "expected >100 words from docx");
     }
 }

@@ -3,9 +3,13 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use std::io::Write;
+use std::path::Path;
+
 use crate::concepts::canvas::Canvas;
 use crate::concepts::character_perspective::CharacterPerspective;
 use crate::concepts::declared_intent::DeclaredIntent;
+use crate::concepts::manifest::Manifest;
 use crate::concepts::narrative_graph::{GraphNode, NarrativeGraph};
 use crate::concepts::provider::Provider;
 use crate::concepts::scene_map::SceneMap;
@@ -27,6 +31,7 @@ pub enum SkillCategory {
     PerspectiveTools,
     StructuralTools,
     CanvasTools,
+    CustomTools,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +47,25 @@ pub struct Execution {
 pub enum Permission {
     Enabled,
     Disabled,
+    ConditionalOn(String),
+}
+
+/// Data specific to custom (LLM-powered) skills loaded from TOML files.
+#[derive(Debug, Clone)]
+pub struct CustomSkillData {
+    pub prompt_template: String,
+    pub output_schema: Option<serde_json::Value>,
+}
+
+/// TOML file format for custom skill definitions.
+#[derive(Debug, Deserialize)]
+struct CustomSkillToml {
+    name: String,
+    description: String,
+    prompt_template: String,
+    input_schema: toml::Value,
+    #[serde(default)]
+    output_schema: Option<toml::Value>,
 }
 
 /// Context passed to skill invocations, grouping all available state.
@@ -52,20 +76,26 @@ pub struct SkillContext<'a> {
     pub intent: Option<&'a mut DeclaredIntent>,
     pub perspectives: Option<&'a mut CharacterPerspective>,
     pub canvas: Option<&'a mut Canvas>,
+    pub manifest: Option<&'a Manifest>,
+    pub project_root: Option<&'a Path>,
 }
 
 pub struct Skills {
     registry: HashMap<String, SkillDefinition>,
+    custom_data: HashMap<String, CustomSkillData>,
     execution_log: Vec<Execution>,
     permissions: HashMap<String, Permission>,
+    provider_is_local: bool,
 }
 
 impl Skills {
     pub fn new() -> Self {
         let mut skills = Self {
             registry: HashMap::new(),
+            custom_data: HashMap::new(),
             execution_log: Vec::new(),
             permissions: HashMap::new(),
+            provider_is_local: false,
         };
         skills.register_defaults();
         skills
@@ -112,6 +142,29 @@ impl Skills {
         self.register(SkillDefinition {
             name: "story_stats".to_string(),
             description: "Get overall manuscript statistics (word count, scene count, character count)".to_string(),
+            category: SkillCategory::FileTools,
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        });
+
+        self.register(SkillDefinition {
+            name: "read_context_file".to_string(),
+            description: "Read a supporting file (outline, characters, notes) by path or role".to_string(),
+            category: SkillCategory::FileTools,
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "file": { "type": "string", "description": "File path or role (e.g. 'outline', 'characters', 'notes', or a specific path like 'outline.md')" }
+                },
+                "required": ["file"]
+            }),
+        });
+
+        self.register(SkillDefinition {
+            name: "list_files".to_string(),
+            description: "List all files in the manifest with roles and metadata".to_string(),
             category: SkillCategory::FileTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -375,12 +428,26 @@ impl Skills {
     ) -> serde_json::Value {
         let start = std::time::Instant::now();
 
+        // Check if skill exists
+        if !self.registry.contains_key(skill_name) {
+            return serde_json::json!({ "error": format!("Unknown skill: {skill_name}") });
+        }
+
+        // Permission check
+        if !self.is_permitted(skill_name) {
+            return serde_json::json!({
+                "error": format!("Skill '{}' is not permitted", skill_name)
+            });
+        }
+
         let result = match skill_name {
             // File Tools
             "story_grep" => self.exec_story_grep(args, ctx.text_buffer),
             "read_scene" => self.exec_read_scene(args, ctx.text_buffer, ctx.scene_map),
             "list_scenes" => self.exec_list_scenes(ctx.text_buffer, ctx.scene_map),
             "story_stats" => self.exec_story_stats(ctx.text_buffer, ctx.scene_map, ctx.graph),
+            "read_context_file" => self.exec_read_context_file(args, ctx.manifest, ctx.project_root),
+            "list_files" => self.exec_list_files(ctx.manifest),
 
             // Graph Tools
             "query_graph" => self.exec_query_graph(args, ctx.graph),
@@ -417,17 +484,32 @@ impl Skills {
             "replace_in_canvas" => self.exec_replace_in_canvas(args, ctx),
             "insert_scene" => self.exec_insert_scene(args, ctx),
 
-            _ => serde_json::json!({ "error": format!("Unknown skill: {skill_name}") }),
+            _ => {
+                if self.custom_data.contains_key(skill_name) {
+                    self.exec_custom_skill(skill_name, args, provider).await
+                } else {
+                    serde_json::json!({ "error": format!("Unknown skill: {skill_name}") })
+                }
+            }
         };
 
         let duration = start.elapsed();
+        let duration_ms = duration.as_millis() as u64;
+
         self.execution_log.push(Execution {
             skill_name: skill_name.to_string(),
             args: args.clone(),
             result: result.clone(),
             timestamp: Utc::now(),
-            duration_ms: duration.as_millis() as u64,
+            duration_ms,
         });
+
+        // Audit trail for custom skills
+        if self.custom_data.contains_key(skill_name) {
+            if let Some(root) = ctx.project_root {
+                self.write_audit_log(root, skill_name, args, &result, duration_ms);
+            }
+        }
 
         result
     }
@@ -436,12 +518,7 @@ impl Skills {
     pub fn tool_schemas(&self) -> Vec<crate::concepts::provider::ToolSchema> {
         self.registry
             .values()
-            .filter(|s| {
-                self.permissions
-                    .get(&s.name)
-                    .map(|p| *p == Permission::Enabled)
-                    .unwrap_or(false)
-            })
+            .filter(|s| self.is_permitted(&s.name))
             .map(|s| crate::concepts::provider::ToolSchema {
                 name: s.name.clone(),
                 description: s.description.clone(),
@@ -454,12 +531,7 @@ impl Skills {
     pub fn list_available(&self) -> Vec<&SkillDefinition> {
         self.registry
             .values()
-            .filter(|s| {
-                self.permissions
-                    .get(&s.name)
-                    .map(|p| *p == Permission::Enabled)
-                    .unwrap_or(false)
-            })
+            .filter(|s| self.is_permitted(&s.name))
             .collect()
     }
 
@@ -467,6 +539,197 @@ impl Skills {
         if self.registry.contains_key(skill_name) {
             self.permissions
                 .insert(skill_name.to_string(), permission);
+        }
+    }
+
+    /// Check if a skill is permitted based on its permission and provider locality.
+    pub fn is_permitted(&self, skill_name: &str) -> bool {
+        match self.permissions.get(skill_name) {
+            Some(Permission::Enabled) => true,
+            Some(Permission::Disabled) => false,
+            Some(Permission::ConditionalOn(cond)) => match cond.as_str() {
+                "is_local" => self.provider_is_local,
+                "is_cloud" => !self.provider_is_local,
+                _ => false,
+            },
+            None => false,
+        }
+    }
+
+    /// Update provider locality flag for conditional permission checks.
+    pub fn set_provider_locality(&mut self, is_local: bool) {
+        self.provider_is_local = is_local;
+    }
+
+    /// Load custom skill definitions from TOML files in the given directory.
+    /// Returns a list of validation errors for malformed definitions (which are skipped).
+    pub fn load_custom_skills(&mut self, skills_dir: &Path) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        if !skills_dir.is_dir() {
+            return errors;
+        }
+
+        let entries = match std::fs::read_dir(skills_dir) {
+            Ok(e) => e,
+            Err(e) => {
+                errors.push(format!("Failed to read skills directory: {e}"));
+                return errors;
+            }
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    errors.push(format!("Failed to read directory entry: {e}"));
+                    continue;
+                }
+            };
+
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+                continue;
+            }
+
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    errors.push(format!("{}: failed to read: {e}", path.display()));
+                    continue;
+                }
+            };
+
+            let skill_toml: CustomSkillToml = match toml::from_str(&content) {
+                Ok(s) => s,
+                Err(e) => {
+                    errors.push(format!("{}: invalid TOML: {e}", path.display()));
+                    continue;
+                }
+            };
+
+            // Validate
+            if skill_toml.name.is_empty() {
+                errors.push(format!("{}: name cannot be empty", path.display()));
+                continue;
+            }
+            if skill_toml.prompt_template.is_empty() {
+                errors.push(format!(
+                    "{}: prompt_template cannot be empty",
+                    path.display()
+                ));
+                continue;
+            }
+
+            // Convert schemas from TOML to JSON
+            let input_schema = toml_to_json(skill_toml.input_schema);
+            let output_schema = skill_toml.output_schema.map(toml_to_json);
+
+            // Register the skill definition
+            self.register(SkillDefinition {
+                name: skill_toml.name.clone(),
+                description: skill_toml.description,
+                category: SkillCategory::CustomTools,
+                input_schema,
+            });
+
+            // Store custom execution data
+            self.custom_data.insert(
+                skill_toml.name,
+                CustomSkillData {
+                    prompt_template: skill_toml.prompt_template,
+                    output_schema,
+                },
+            );
+        }
+
+        errors
+    }
+
+    /// Execute a custom skill by rendering its prompt template and calling the provider.
+    async fn exec_custom_skill(
+        &self,
+        skill_name: &str,
+        args: &serde_json::Value,
+        provider: Option<&mut Provider>,
+    ) -> serde_json::Value {
+        let data = match self.custom_data.get(skill_name) {
+            Some(d) => d,
+            None => {
+                return serde_json::json!({
+                    "error": format!("Custom skill data not found: {skill_name}")
+                })
+            }
+        };
+
+        let provider = match provider {
+            Some(p) => p,
+            None => {
+                return serde_json::json!({
+                    "error": "LLM provider required for custom skills"
+                })
+            }
+        };
+
+        // Render prompt template by replacing {{key}} placeholders with arg values
+        let mut prompt = data.prompt_template.clone();
+        if let Some(obj) = args.as_object() {
+            for (key, value) in obj {
+                let placeholder = format!("{{{{{key}}}}}");
+                let replacement = match value {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                prompt = prompt.replace(&placeholder, &replacement);
+            }
+        }
+
+        // Call the LLM provider
+        let messages = vec![crate::concepts::provider::Message {
+            role: crate::concepts::provider::Role::User,
+            content: prompt,
+            tool_calls: None,
+            tool_results: None,
+        }];
+
+        match provider.complete(&messages, &[], None).await {
+            Ok(response) => {
+                let content = response.content.unwrap_or_default();
+                // Try to parse as JSON, fall back to wrapping in a response object
+                match serde_json::from_str::<serde_json::Value>(&content) {
+                    Ok(json) => json,
+                    Err(_) => serde_json::json!({ "response": content }),
+                }
+            }
+            Err(e) => serde_json::json!({ "error": e.to_string() }),
+        }
+    }
+
+    /// Append an execution record to the audit trail file (.laires/skill_log.jsonl).
+    fn write_audit_log(
+        &self,
+        project_root: &Path,
+        skill_name: &str,
+        args: &serde_json::Value,
+        result: &serde_json::Value,
+        duration_ms: u64,
+    ) {
+        let log_path = project_root
+            .join(crate::config::LAIRES_DIR)
+            .join(crate::config::SKILL_LOG_FILE);
+        let entry = serde_json::json!({
+            "timestamp": Utc::now().to_rfc3339(),
+            "skill": skill_name,
+            "args": args,
+            "result": result,
+            "duration_ms": duration_ms,
+        });
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+        {
+            let _ = writeln!(file, "{}", entry);
         }
     }
 
@@ -578,6 +841,133 @@ impl Skills {
             "character_count": graph.get_characters().len(),
             "objective_count": graph.get_objectives().len(),
             "conflict_count": graph.get_conflicts().len(),
+        })
+    }
+
+    fn exec_read_context_file(
+        &self,
+        args: &serde_json::Value,
+        manifest: Option<&Manifest>,
+        project_root: Option<&Path>,
+    ) -> serde_json::Value {
+        let manifest = match manifest {
+            Some(m) => m,
+            None => return serde_json::json!({ "error": "No manifest loaded. Run `laires scan` first." }),
+        };
+        let project_root = match project_root {
+            Some(r) => r,
+            None => return serde_json::json!({ "error": "Project root not available" }),
+        };
+
+        let file_ref = args["file"].as_str().unwrap_or("");
+
+        // Try to find by role first (e.g. "outline", "characters", "notes")
+        let context_file = manifest
+            .context_files
+            .iter()
+            .find(|cf| cf.role.to_string() == file_ref)
+            .or_else(|| {
+                // Then try by path (exact or suffix match)
+                manifest.context_files.iter().find(|cf| {
+                    cf.path == file_ref || cf.path.ends_with(file_ref)
+                })
+            });
+
+        match context_file {
+            Some(cf) => {
+                let full_path = project_root.join(&cf.path);
+                let ext = full_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("");
+
+                let content = if ext == "docx" {
+                    match crate::concepts::docx::extract_text_from_docx(&full_path) {
+                        Ok(text) => text,
+                        Err(e) => {
+                            return serde_json::json!({
+                                "error": format!("Failed to read {}: {e}", cf.path)
+                            })
+                        }
+                    }
+                } else {
+                    match std::fs::read_to_string(&full_path) {
+                        Ok(text) => text,
+                        Err(e) => {
+                            return serde_json::json!({
+                                "error": format!("Failed to read {}: {e}", cf.path)
+                            })
+                        }
+                    }
+                };
+
+                serde_json::json!({
+                    "path": cf.path,
+                    "role": cf.role.to_string(),
+                    "content": content,
+                    "word_count": content.split_whitespace().count(),
+                })
+            }
+            None => serde_json::json!({
+                "error": format!("Context file not found: {file_ref}"),
+                "available": manifest.context_files.iter().map(|cf| {
+                    serde_json::json!({ "path": cf.path, "role": cf.role.to_string() })
+                }).collect::<Vec<_>>(),
+            }),
+        }
+    }
+
+    fn exec_list_files(
+        &self,
+        manifest: Option<&Manifest>,
+    ) -> serde_json::Value {
+        let manifest = match manifest {
+            Some(m) => m,
+            None => return serde_json::json!({ "error": "No manifest loaded. Run `laires scan` first." }),
+        };
+
+        let story_files: Vec<serde_json::Value> = manifest
+            .story_files
+            .iter()
+            .map(|sf| {
+                serde_json::json!({
+                    "path": sf.path,
+                    "role": "story",
+                    "format": sf.format,
+                    "order": sf.order,
+                })
+            })
+            .collect();
+
+        let context_files: Vec<serde_json::Value> = manifest
+            .context_files
+            .iter()
+            .map(|cf| {
+                serde_json::json!({
+                    "path": cf.path,
+                    "role": cf.role.to_string(),
+                })
+            })
+            .collect();
+
+        let excluded: Vec<serde_json::Value> = manifest
+            .excluded
+            .iter()
+            .map(|ef| {
+                serde_json::json!({
+                    "path": ef.path,
+                    "reason": ef.reason,
+                })
+            })
+            .collect();
+
+        serde_json::json!({
+            "story_file_count": story_files.len(),
+            "context_file_count": context_files.len(),
+            "excluded_count": excluded.len(),
+            "story_files": story_files,
+            "context_files": context_files,
+            "excluded": excluded,
         })
     }
 
@@ -1258,7 +1648,7 @@ impl Skills {
             Ok(()) => {
                 // Trigger scene map reindex if text contains scene boundary markers
                 let full_text = ctx.text_buffer.read_all();
-                ctx.scene_map.full_reindex(&full_text);
+                ctx.scene_map.full_reindex(&full_text, "");
 
                 serde_json::json!({
                     "status": "written",
@@ -1292,7 +1682,7 @@ impl Skills {
         match ctx.text_buffer.replace(range, text) {
             Ok(()) => {
                 let full_text = ctx.text_buffer.read_all();
-                ctx.scene_map.full_reindex(&full_text);
+                ctx.scene_map.full_reindex(&full_text, "");
 
                 serde_json::json!({
                     "status": "replaced",
@@ -1326,7 +1716,7 @@ impl Skills {
         match ctx.text_buffer.insert(position, &scene_text) {
             Ok(()) => {
                 let full_text = ctx.text_buffer.read_all();
-                ctx.scene_map.full_reindex(&full_text);
+                ctx.scene_map.full_reindex(&full_text, "");
 
                 serde_json::json!({
                     "status": "inserted",
@@ -1350,6 +1740,25 @@ impl Default for Skills {
 // -------------------------------------------------------------------------
 // Helpers
 // -------------------------------------------------------------------------
+
+/// Convert a TOML value to a serde_json value.
+fn toml_to_json(val: toml::Value) -> serde_json::Value {
+    match val {
+        toml::Value::String(s) => serde_json::Value::String(s),
+        toml::Value::Integer(i) => serde_json::json!(i),
+        toml::Value::Float(f) => serde_json::json!(f),
+        toml::Value::Boolean(b) => serde_json::Value::Bool(b),
+        toml::Value::Array(arr) => {
+            serde_json::Value::Array(arr.into_iter().map(toml_to_json).collect())
+        }
+        toml::Value::Table(map) => {
+            let obj: serde_json::Map<String, serde_json::Value> =
+                map.into_iter().map(|(k, v)| (k, toml_to_json(v))).collect();
+            serde_json::Value::Object(obj)
+        }
+        toml::Value::Datetime(dt) => serde_json::Value::String(dt.to_string()),
+    }
+}
 
 /// Find a character's ID by name (case-insensitive)
 fn find_character_id(graph: &NarrativeGraph, name: &str) -> Option<String> {
@@ -1398,7 +1807,7 @@ mod tests {
         let text_buffer = TextBuffer::from_str(text, PathBuf::from("/tmp/test.md"));
 
         let mut scene_map = SceneMap::new(ParseMode::Prose);
-        scene_map.full_reindex(text);
+        scene_map.full_reindex(text, "");
 
         let mut graph = NarrativeGraph::new();
 
@@ -1428,6 +1837,7 @@ mod tests {
                 characters_present: vec![char_marcus.clone(), char_elena.clone()],
                 location: None,
                 time: None,
+                file_path: String::new(),
             });
             graph.add_node(GraphNode::Scene {
                 id: scene_ids[1].clone(),
@@ -1436,6 +1846,7 @@ mod tests {
                 characters_present: vec![char_elena.clone()],
                 location: None,
                 time: None,
+                file_path: String::new(),
             });
 
             let obj_id = new_id();
@@ -1467,6 +1878,8 @@ mod tests {
             intent: Some(&mut intent),
             perspectives: None,
             canvas: None,
+            manifest: None,
+            project_root: None,
         };
 
         let result = skills
@@ -1489,6 +1902,8 @@ mod tests {
             intent: Some(&mut intent),
             perspectives: None,
             canvas: None,
+            manifest: None,
+            project_root: None,
         };
 
         let result = skills
@@ -1508,6 +1923,8 @@ mod tests {
             intent: Some(&mut intent),
             perspectives: None,
             canvas: None,
+            manifest: None,
+            project_root: None,
         };
 
         let result = skills
@@ -1527,6 +1944,8 @@ mod tests {
             intent: Some(&mut intent),
             perspectives: None,
             canvas: None,
+            manifest: None,
+            project_root: None,
         };
 
         let result = skills
@@ -1546,6 +1965,8 @@ mod tests {
             intent: Some(&mut intent),
             perspectives: None,
             canvas: None,
+            manifest: None,
+            project_root: None,
         };
 
         let result = skills
@@ -1567,6 +1988,8 @@ mod tests {
             intent: Some(&mut intent),
             perspectives: Some(&mut perspectives),
             canvas: None,
+            manifest: None,
+            project_root: None,
         };
 
         let result = skills
@@ -1591,6 +2014,8 @@ mod tests {
             intent: Some(&mut intent),
             perspectives: None,
             canvas: None,
+            manifest: None,
+            project_root: None,
         };
 
         let result = skills
@@ -1623,6 +2048,8 @@ mod tests {
             intent: Some(&mut intent),
             perspectives: None,
             canvas: None,
+            manifest: None,
+            project_root: None,
         };
 
         let result = skills
@@ -1653,6 +2080,8 @@ mod tests {
             intent: Some(&mut intent),
             perspectives: None,
             canvas: None,
+            manifest: None,
+            project_root: None,
         };
 
         let result = skills
@@ -1683,6 +2112,8 @@ mod tests {
             intent: Some(&mut intent),
             perspectives: None,
             canvas: None,
+            manifest: None,
+            project_root: None,
         };
 
         let original_len = ctx.text_buffer.read_all().len();
@@ -1714,6 +2145,8 @@ mod tests {
             intent: Some(&mut intent),
             perspectives: None,
             canvas: None,
+            manifest: None,
+            project_root: None,
         };
 
         let result = skills
@@ -1743,6 +2176,8 @@ mod tests {
             intent: Some(&mut intent),
             perspectives: None,
             canvas: None,
+            manifest: None,
+            project_root: None,
         };
 
         let result = skills
@@ -1778,5 +2213,524 @@ mod tests {
 
         // Other skills still available
         assert!(schemas.iter().any(|s| s.name == "read_scene"));
+    }
+
+    #[tokio::test]
+    async fn test_list_files_skill() {
+        let (mut text_buffer, mut scene_map, graph, mut intent) = make_test_context();
+        let manifest = crate::concepts::manifest::Manifest {
+            meta: crate::concepts::manifest::ManifestMeta {
+                last_scan: "2026-01-01T00:00:00Z".to_string(),
+                classification_model: "test".to_string(),
+            },
+            story_files: vec![crate::concepts::manifest::StoryFile {
+                path: "chapter-1.md".to_string(),
+                format: "prose".to_string(),
+                order: 1,
+                content_hash: "abc".to_string(),
+            }],
+            context_files: vec![
+                crate::concepts::manifest::ContextFile {
+                    path: "outline.md".to_string(),
+                    role: crate::concepts::manifest::FileRole::Outline,
+                    content_hash: "def".to_string(),
+                },
+                crate::concepts::manifest::ContextFile {
+                    path: "characters.md".to_string(),
+                    role: crate::concepts::manifest::FileRole::Characters,
+                    content_hash: "ghi".to_string(),
+                },
+            ],
+            excluded: vec![crate::concepts::manifest::ExcludedFile {
+                path: "old-draft.md".to_string(),
+                reason: "Older version".to_string(),
+            }],
+        };
+
+        let mut skills = Skills::new();
+        let mut ctx = SkillContext {
+            text_buffer: &mut text_buffer,
+            scene_map: &mut scene_map,
+            graph: &graph,
+            intent: Some(&mut intent),
+            perspectives: None,
+            canvas: None,
+            manifest: Some(&manifest),
+            project_root: None,
+        };
+
+        let result = skills
+            .invoke("list_files", &serde_json::json!({}), &mut ctx, None)
+            .await;
+
+        assert_eq!(result["story_file_count"], 1);
+        assert_eq!(result["context_file_count"], 2);
+        assert_eq!(result["excluded_count"], 1);
+
+        let story = result["story_files"].as_array().unwrap();
+        assert_eq!(story[0]["path"], "chapter-1.md");
+        assert_eq!(story[0]["role"], "story");
+
+        let context = result["context_files"].as_array().unwrap();
+        assert_eq!(context[0]["path"], "outline.md");
+        assert_eq!(context[0]["role"], "outline");
+        assert_eq!(context[1]["role"], "characters");
+
+        let excluded = result["excluded"].as_array().unwrap();
+        assert_eq!(excluded[0]["path"], "old-draft.md");
+    }
+
+    #[tokio::test]
+    async fn test_list_files_no_manifest() {
+        let (mut text_buffer, mut scene_map, graph, mut intent) = make_test_context();
+        let mut skills = Skills::new();
+        let mut ctx = SkillContext {
+            text_buffer: &mut text_buffer,
+            scene_map: &mut scene_map,
+            graph: &graph,
+            intent: Some(&mut intent),
+            perspectives: None,
+            canvas: None,
+            manifest: None,
+            project_root: None,
+        };
+
+        let result = skills
+            .invoke("list_files", &serde_json::json!({}), &mut ctx, None)
+            .await;
+        assert!(result["error"].as_str().unwrap().contains("manifest"));
+    }
+
+    #[tokio::test]
+    async fn test_read_context_file_by_role() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join("outline.md"), "# Story Outline\n\nAct 1: Setup\nAct 2: Confrontation\nAct 3: Resolution").unwrap();
+
+        let (mut text_buffer, mut scene_map, graph, mut intent) = make_test_context();
+        let manifest = crate::concepts::manifest::Manifest {
+            meta: crate::concepts::manifest::ManifestMeta {
+                last_scan: String::new(),
+                classification_model: String::new(),
+            },
+            story_files: vec![],
+            context_files: vec![crate::concepts::manifest::ContextFile {
+                path: "outline.md".to_string(),
+                role: crate::concepts::manifest::FileRole::Outline,
+                content_hash: "hash".to_string(),
+            }],
+            excluded: vec![],
+        };
+
+        let mut skills = Skills::new();
+        let mut ctx = SkillContext {
+            text_buffer: &mut text_buffer,
+            scene_map: &mut scene_map,
+            graph: &graph,
+            intent: Some(&mut intent),
+            perspectives: None,
+            canvas: None,
+            manifest: Some(&manifest),
+            project_root: Some(root),
+        };
+
+        // Look up by role
+        let result = skills
+            .invoke("read_context_file", &serde_json::json!({"file": "outline"}), &mut ctx, None)
+            .await;
+        assert_eq!(result["path"], "outline.md");
+        assert_eq!(result["role"], "outline");
+        assert!(result["content"].as_str().unwrap().contains("Act 1"));
+        assert!(result["word_count"].as_u64().unwrap() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_read_context_file_by_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join("characters.md"), "# Characters\n\nMarcus: A warrior prince").unwrap();
+
+        let (mut text_buffer, mut scene_map, graph, mut intent) = make_test_context();
+        let manifest = crate::concepts::manifest::Manifest {
+            meta: crate::concepts::manifest::ManifestMeta {
+                last_scan: String::new(),
+                classification_model: String::new(),
+            },
+            story_files: vec![],
+            context_files: vec![crate::concepts::manifest::ContextFile {
+                path: "characters.md".to_string(),
+                role: crate::concepts::manifest::FileRole::Characters,
+                content_hash: "hash".to_string(),
+            }],
+            excluded: vec![],
+        };
+
+        let mut skills = Skills::new();
+        let mut ctx = SkillContext {
+            text_buffer: &mut text_buffer,
+            scene_map: &mut scene_map,
+            graph: &graph,
+            intent: Some(&mut intent),
+            perspectives: None,
+            canvas: None,
+            manifest: Some(&manifest),
+            project_root: Some(root),
+        };
+
+        // Look up by path
+        let result = skills
+            .invoke("read_context_file", &serde_json::json!({"file": "characters.md"}), &mut ctx, None)
+            .await;
+        assert_eq!(result["path"], "characters.md");
+        assert_eq!(result["role"], "characters");
+        assert!(result["content"].as_str().unwrap().contains("Marcus"));
+    }
+
+    #[tokio::test]
+    async fn test_read_context_file_not_found() {
+        let (mut text_buffer, mut scene_map, graph, mut intent) = make_test_context();
+        let manifest = crate::concepts::manifest::Manifest {
+            meta: crate::concepts::manifest::ManifestMeta {
+                last_scan: String::new(),
+                classification_model: String::new(),
+            },
+            story_files: vec![],
+            context_files: vec![crate::concepts::manifest::ContextFile {
+                path: "outline.md".to_string(),
+                role: crate::concepts::manifest::FileRole::Outline,
+                content_hash: "hash".to_string(),
+            }],
+            excluded: vec![],
+        };
+
+        let mut skills = Skills::new();
+        let mut ctx = SkillContext {
+            text_buffer: &mut text_buffer,
+            scene_map: &mut scene_map,
+            graph: &graph,
+            intent: Some(&mut intent),
+            perspectives: None,
+            canvas: None,
+            manifest: Some(&manifest),
+            project_root: Some(std::path::Path::new("/tmp")),
+        };
+
+        let result = skills
+            .invoke("read_context_file", &serde_json::json!({"file": "nonexistent"}), &mut ctx, None)
+            .await;
+        assert!(result["error"].as_str().unwrap().contains("not found"));
+        // Should list available files
+        assert!(result["available"].as_array().is_some());
+    }
+
+    #[test]
+    fn test_context_file_skills_registered() {
+        let skills = Skills::new();
+        let schemas = skills.tool_schemas();
+        assert!(schemas.iter().any(|s| s.name == "read_context_file"));
+        assert!(schemas.iter().any(|s| s.name == "list_files"));
+    }
+
+    // -------------------------------------------------------------------------
+    // Custom Skills Framework tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_custom_skill_toml_parsing() {
+        let toml_content = r#"
+name = "check_dialect"
+description = "Check if dialogue matches a character's dialect"
+prompt_template = "Analyze: {{character}} says: {{text}}"
+
+[input_schema]
+type = "object"
+required = ["character", "text"]
+
+[input_schema.properties.character]
+type = "string"
+description = "Character name"
+
+[input_schema.properties.text]
+type = "string"
+description = "Dialogue to check"
+
+[output_schema]
+type = "object"
+
+[output_schema.properties.consistent]
+type = "boolean"
+"#;
+        let skill: CustomSkillToml = toml::from_str(toml_content).unwrap();
+        assert_eq!(skill.name, "check_dialect");
+        assert_eq!(
+            skill.description,
+            "Check if dialogue matches a character's dialect"
+        );
+        assert!(skill.prompt_template.contains("{{character}}"));
+        assert!(skill.output_schema.is_some());
+    }
+
+    #[test]
+    fn test_custom_skill_load_and_register() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        std::fs::create_dir(&skills_dir).unwrap();
+
+        std::fs::write(
+            skills_dir.join("check_dialect.toml"),
+            r#"
+name = "check_dialect"
+description = "Check dialect"
+prompt_template = "Check: {{text}}"
+
+[input_schema]
+type = "object"
+required = ["text"]
+
+[input_schema.properties.text]
+type = "string"
+"#,
+        )
+        .unwrap();
+
+        let mut skills = Skills::new();
+        let errors = skills.load_custom_skills(&skills_dir);
+        assert!(errors.is_empty(), "Unexpected errors: {:?}", errors);
+
+        // Should be registered in tool schemas
+        let schemas = skills.tool_schemas();
+        assert!(schemas.iter().any(|s| s.name == "check_dialect"));
+
+        // Should be in custom_data
+        assert!(skills.custom_data.contains_key("check_dialect"));
+
+        // Should have correct category
+        let def = skills.registry.get("check_dialect").unwrap();
+        assert_eq!(def.category, SkillCategory::CustomTools);
+    }
+
+    #[test]
+    fn test_custom_skill_validation_empty_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        std::fs::create_dir(&skills_dir).unwrap();
+
+        std::fs::write(
+            skills_dir.join("bad.toml"),
+            r#"
+name = ""
+description = "Bad skill"
+prompt_template = "Do something"
+
+[input_schema]
+type = "object"
+"#,
+        )
+        .unwrap();
+
+        let mut skills = Skills::new();
+        let errors = skills.load_custom_skills(&skills_dir);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("name cannot be empty"));
+    }
+
+    #[test]
+    fn test_custom_skill_validation_empty_template() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        std::fs::create_dir(&skills_dir).unwrap();
+
+        std::fs::write(
+            skills_dir.join("bad.toml"),
+            r#"
+name = "bad_skill"
+description = "Bad skill"
+prompt_template = ""
+
+[input_schema]
+type = "object"
+"#,
+        )
+        .unwrap();
+
+        let mut skills = Skills::new();
+        let errors = skills.load_custom_skills(&skills_dir);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("prompt_template cannot be empty"));
+    }
+
+    #[test]
+    fn test_custom_skill_validation_invalid_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        std::fs::create_dir(&skills_dir).unwrap();
+
+        std::fs::write(skills_dir.join("bad.toml"), "not valid toml {{{{").unwrap();
+
+        let mut skills = Skills::new();
+        let errors = skills.load_custom_skills(&skills_dir);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("invalid TOML"));
+    }
+
+    #[test]
+    fn test_custom_skill_nonexistent_dir() {
+        let mut skills = Skills::new();
+        let errors = skills.load_custom_skills(Path::new("/nonexistent/skills"));
+        assert!(errors.is_empty()); // Missing dir is not an error
+    }
+
+    #[test]
+    fn test_permission_conditional_is_local() {
+        let mut skills = Skills::new();
+        skills.set_permission(
+            "story_grep",
+            Permission::ConditionalOn("is_local".to_string()),
+        );
+
+        // When provider is not local, should be denied
+        skills.set_provider_locality(false);
+        assert!(!skills.is_permitted("story_grep"));
+        let schemas = skills.tool_schemas();
+        assert!(!schemas.iter().any(|s| s.name == "story_grep"));
+
+        // When provider is local, should be permitted
+        skills.set_provider_locality(true);
+        assert!(skills.is_permitted("story_grep"));
+        let schemas = skills.tool_schemas();
+        assert!(schemas.iter().any(|s| s.name == "story_grep"));
+    }
+
+    #[test]
+    fn test_permission_conditional_is_cloud() {
+        let mut skills = Skills::new();
+        skills.set_permission(
+            "story_grep",
+            Permission::ConditionalOn("is_cloud".to_string()),
+        );
+
+        // When provider is local, "is_cloud" should deny
+        skills.set_provider_locality(true);
+        assert!(!skills.is_permitted("story_grep"));
+
+        // When provider is not local (cloud), "is_cloud" should permit
+        skills.set_provider_locality(false);
+        assert!(skills.is_permitted("story_grep"));
+    }
+
+    #[test]
+    fn test_permission_conditional_unknown_condition() {
+        let mut skills = Skills::new();
+        skills.set_permission(
+            "story_grep",
+            Permission::ConditionalOn("unknown_cond".to_string()),
+        );
+        // Unknown conditions default to denied
+        assert!(!skills.is_permitted("story_grep"));
+    }
+
+    #[tokio::test]
+    async fn test_invoke_permission_denied() {
+        let (mut text_buffer, mut scene_map, graph, mut intent) = make_test_context();
+        let mut skills = Skills::new();
+        skills.set_permission("story_grep", Permission::Disabled);
+
+        let mut ctx = SkillContext {
+            text_buffer: &mut text_buffer,
+            scene_map: &mut scene_map,
+            graph: &graph,
+            intent: Some(&mut intent),
+            perspectives: None,
+            canvas: None,
+            manifest: None,
+            project_root: None,
+        };
+
+        let result = skills
+            .invoke(
+                "story_grep",
+                &serde_json::json!({"pattern": "test"}),
+                &mut ctx,
+                None,
+            )
+            .await;
+        assert!(result["error"]
+            .as_str()
+            .unwrap()
+            .contains("not permitted"));
+    }
+
+    #[test]
+    fn test_audit_log_written() {
+        let tmp = tempfile::tempdir().unwrap();
+        let laires_dir = tmp.path().join(".laires");
+        std::fs::create_dir(&laires_dir).unwrap();
+
+        let skills = Skills::new();
+        let args = serde_json::json!({"text": "Hello"});
+        let result = serde_json::json!({"response": "World"});
+        skills.write_audit_log(tmp.path(), "test_skill", &args, &result, 42);
+
+        let log_path = laires_dir.join("skill_log.jsonl");
+        assert!(log_path.exists());
+        let content = std::fs::read_to_string(&log_path).unwrap();
+        let entry: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(entry["skill"], "test_skill");
+        assert_eq!(entry["duration_ms"], 42);
+        assert!(entry["timestamp"].as_str().is_some());
+    }
+
+    #[test]
+    fn test_toml_to_json_conversion() {
+        let toml_val: toml::Value = toml::from_str(
+            r#"
+type = "object"
+required = ["name"]
+
+[properties.name]
+type = "string"
+description = "A name"
+"#,
+        )
+        .unwrap();
+
+        let json = toml_to_json(toml_val);
+        assert_eq!(json["type"], "object");
+        assert_eq!(json["required"][0], "name");
+        assert_eq!(json["properties"]["name"]["type"], "string");
+    }
+
+    #[test]
+    fn test_custom_skill_schema_in_tool_schemas() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        std::fs::create_dir(&skills_dir).unwrap();
+
+        std::fs::write(
+            skills_dir.join("analyze_tone.toml"),
+            r#"
+name = "analyze_tone"
+description = "Analyze the tone of a passage"
+prompt_template = "What is the tone of: {{text}}"
+
+[input_schema]
+type = "object"
+required = ["text"]
+
+[input_schema.properties.text]
+type = "string"
+description = "Text to analyze"
+"#,
+        )
+        .unwrap();
+
+        let mut skills = Skills::new();
+        skills.load_custom_skills(&skills_dir);
+
+        let schemas = skills.tool_schemas();
+        let schema = schemas.iter().find(|s| s.name == "analyze_tone").unwrap();
+        assert_eq!(schema.description, "Analyze the tone of a passage");
+        assert_eq!(schema.parameters["type"], "object");
+        assert_eq!(schema.parameters["properties"]["text"]["type"], "string");
     }
 }

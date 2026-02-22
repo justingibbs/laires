@@ -2,6 +2,7 @@ use std::io::{self, BufRead, Write};
 
 use crate::concepts::character_perspective::CharacterPerspective;
 use crate::concepts::declared_intent::DeclaredIntent;
+use crate::concepts::manifest::Manifest;
 use crate::concepts::narrative_graph::NarrativeGraph;
 use crate::concepts::provider::{Message, Provider, Role, ToolResult};
 use crate::concepts::scene_map::{ParseMode, SceneMap};
@@ -50,7 +51,7 @@ pub async fn run(new_session: bool) -> anyhow::Result<()> {
         _ => ParseMode::Prose,
     };
     let mut scene_map = SceneMap::new(parse_mode);
-    scene_map.full_reindex(&full_text);
+    scene_map.full_reindex(&full_text, "");
 
     let graph_path = project_root.join(LAIRES_DIR).join("graph.json");
     let graph = if graph_path.exists() {
@@ -79,6 +80,9 @@ pub async fn run(new_session: bool) -> anyhow::Result<()> {
     } else {
         CharacterPerspective::new()
     };
+
+    // Load manifest if available
+    let manifest = Manifest::load(&project_root).ok();
 
     let mut provider = Provider::from_project_config(&config)?;
     let mut skills = Skills::new();
@@ -216,6 +220,8 @@ pub async fn run(new_session: bool) -> anyhow::Result<()> {
                             intent: Some(&mut intent),
                             perspectives: Some(&mut perspectives),
                             canvas: None,
+                            manifest: manifest.as_ref(),
+                            project_root: Some(&project_root),
                         };
 
                         let result = skills

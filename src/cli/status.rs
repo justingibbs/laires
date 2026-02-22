@@ -26,7 +26,7 @@ pub fn run() -> anyhow::Result<()> {
             _ => ParseMode::Prose,
         };
         let mut scene_map = SceneMap::new(parse_mode);
-        scene_map.full_reindex(&full_text);
+        scene_map.full_reindex(&full_text, "");
 
         println!("Story: {}", story_path.display());
         println!("  Words:  {}", text_buffer.word_count());
