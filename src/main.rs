@@ -2,6 +2,7 @@ mod cli;
 mod concepts;
 mod config;
 mod error;
+mod gui;
 mod sync;
 
 use clap::Parser;

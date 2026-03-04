@@ -161,6 +161,11 @@ pub struct NarrativeGraph {
 }
 
 impl NarrativeGraph {
+    /// Access the underlying petgraph DiGraph (read-only).
+    pub fn inner_graph(&self) -> &DiGraph<GraphNode, GraphEdge> {
+        &self.graph
+    }
+
     pub fn new() -> Self {
         Self {
             graph: DiGraph::new(),

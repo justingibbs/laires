@@ -1,9 +1,15 @@
 use std::fs;
+use std::path::Path;
 
 use crate::config::{ProjectConfig, LAIRES_DIR};
 
 pub fn run(title: &str, fountain: bool) -> anyhow::Result<()> {
     let project_dir = std::env::current_dir()?;
+    init_at(&project_dir, title, fountain)
+}
+
+/// Initialize a Laires project at the given directory.
+pub fn init_at(project_dir: &Path, title: &str, fountain: bool) -> anyhow::Result<()> {
     let laires_dir = project_dir.join(LAIRES_DIR);
 
     if laires_dir.exists() {
@@ -50,7 +56,7 @@ pub fn run(title: &str, fountain: bool) -> anyhow::Result<()> {
     if !gitignore_path.exists() {
         fs::write(
             &gitignore_path,
-            ".laires/cache/\n",
+            ".laires/cache/\n.env\n",
         )?;
     } else {
         // Append if .laires/cache/ isn't already in .gitignore
@@ -60,6 +66,11 @@ pub fn run(title: &str, fountain: bool) -> anyhow::Result<()> {
                 &gitignore_path,
                 format!("{content}\n.laires/cache/\n"),
             )?;
+        }
+        // Re-read in case we just appended above
+        let content = fs::read_to_string(&gitignore_path)?;
+        if !content.lines().any(|line| line.trim() == ".env") {
+            fs::write(&gitignore_path, format!("{content}\n.env\n"))?;
         }
     }
 

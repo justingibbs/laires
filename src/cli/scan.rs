@@ -1,4 +1,4 @@
-use crate::concepts::analysis::{Analysis, AnalysisKind, AnalysisTask, Priority};
+use crate::concepts::analysis::{apply_analysis_to_graph, Analysis, AnalysisKind, AnalysisTask, Priority};
 use crate::concepts::file_buffer_manager::FileBufferManager;
 use crate::concepts::manifest::{
     self, build_classification_prompt, build_manifest_from_classification,
@@ -246,12 +246,16 @@ async fn classify_and_confirm(
     config: &ProjectConfig,
     project_root: &std::path::Path,
 ) -> anyhow::Result<Manifest> {
-    let classification_model = &config.classification.model;
+    let classification_model = if config.classification.model.is_empty() {
+        &config.llm.model
+    } else {
+        &config.classification.model
+    };
 
     // Build and send classification prompt
     let prompt = build_classification_prompt(discovered);
 
-    let mut provider = Provider::from_project_config_with_model(config, &config.classification.model)
+    let mut provider = Provider::from_project_config_with_model(config, classification_model)
         .map_err(|e| anyhow::anyhow!("Classification provider error: {e}"))?;
 
     let messages = vec![Message {
@@ -306,177 +310,3 @@ fn confirm_classification() -> anyhow::Result<bool> {
     Ok(trimmed.is_empty() || trimmed == "y" || trimmed == "yes")
 }
 
-/// Apply analysis results to the narrative graph (implements Sync S1.3).
-/// Returns the set of character IDs affected (for perspective invalidation).
-pub fn apply_analysis_to_graph(
-    graph: &mut NarrativeGraph,
-    result: &crate::concepts::analysis::AnalysisResult,
-    scene_id: &str,
-    file_path: &str,
-) -> Vec<String> {
-    use crate::concepts::narrative_graph::*;
-
-    // Add characters
-    for char_data in &result.characters_found {
-        // Check if character already exists by name
-        let existing = graph.get_characters().iter().find_map(|c| {
-            if let GraphNode::Character { id, name, .. } = c {
-                if name.eq_ignore_ascii_case(&char_data.name) {
-                    Some(id.clone())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        });
-
-        if existing.is_none() {
-            let id = new_id();
-            graph.add_node(GraphNode::Character {
-                id: id.clone(),
-                name: char_data.name.clone(),
-                aliases: char_data.aliases.clone(),
-                description: Some(char_data.description.clone()),
-            });
-        }
-    }
-
-    // Add/update scene node
-    let scene_node_exists = graph.get_node(scene_id).is_some();
-    let characters_present: Vec<String> = result
-        .characters_found
-        .iter()
-        .map(|c| {
-            // Find the character's ID
-            graph
-                .get_characters()
-                .iter()
-                .find_map(|gc| {
-                    if let GraphNode::Character { id, name, .. } = gc {
-                        if name.eq_ignore_ascii_case(&c.name) {
-                            Some(id.clone())
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default()
-        })
-        .filter(|id| !id.is_empty())
-        .collect();
-
-    let scene_node = GraphNode::Scene {
-        id: scene_id.to_string(),
-        title: result
-            .scene_metadata
-            .as_ref()
-            .and_then(|m| m.title.clone()),
-        summary: result
-            .scene_metadata
-            .as_ref()
-            .map(|m| m.summary.clone())
-            .unwrap_or_default(),
-        characters_present: characters_present.clone(),
-        location: result
-            .scene_metadata
-            .as_ref()
-            .and_then(|m| m.location.clone()),
-        time: result
-            .scene_metadata
-            .as_ref()
-            .and_then(|m| m.time.clone()),
-        file_path: file_path.to_string(),
-    };
-
-    if scene_node_exists {
-        graph.update_node(scene_id, scene_node);
-    } else {
-        graph.add_node(scene_node);
-    }
-
-    // Add PresentIn edges
-    for char_id in &characters_present {
-        graph.add_edge(char_id, scene_id, GraphEdge::PresentIn);
-    }
-
-    // Add objectives
-    for obj_data in &result.objectives_found {
-        let char_id = graph.get_characters().iter().find_map(|c| {
-            if let GraphNode::Character { id, name, .. } = c {
-                if name.eq_ignore_ascii_case(&obj_data.character_name) {
-                    Some(id.clone())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        });
-
-        if let Some(cid) = char_id {
-            let obj_id = new_id();
-            graph.add_node(GraphNode::Objective {
-                id: obj_id.clone(),
-                character_id: cid.clone(),
-                scope: obj_data.scope,
-                description: obj_data.description.clone(),
-                evidence: obj_data.evidence.clone(),
-                confidence: obj_data.confidence,
-                status: obj_data.status,
-            });
-
-            // Add Pursues edge: Character -> Objective
-            graph.add_edge(
-                &cid,
-                &obj_id,
-                GraphEdge::Pursues {
-                    scene_id: Some(scene_id.to_string()),
-                },
-            );
-
-            // Add Advances or Blocks edge: Scene -> Objective
-            match obj_data.status {
-                Status::Blocked => {
-                    graph.add_edge(scene_id, &obj_id, GraphEdge::Blocks);
-                }
-                _ => {
-                    graph.add_edge(scene_id, &obj_id, GraphEdge::Advances);
-                }
-            }
-        }
-    }
-
-    // Add conflicts
-    for conflict_data in &result.conflicts_found {
-        let conflict_id = new_id();
-        let objective_ids: Vec<String> = conflict_data
-            .between
-            .iter()
-            .filter_map(|name| {
-                graph.get_characters().iter().find_map(|c| {
-                    if let GraphNode::Character { id, name: n, .. } = c {
-                        if n.eq_ignore_ascii_case(name) {
-                            Some(id.clone())
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                })
-            })
-            .collect();
-
-        graph.add_node(GraphNode::Conflict {
-            id: conflict_id,
-            description: conflict_data.description.clone(),
-            objectives: objective_ids,
-        });
-    }
-
-    // Return affected character IDs for perspective invalidation (Sync S5.2)
-    characters_present
-}

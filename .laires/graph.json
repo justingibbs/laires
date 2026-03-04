@@ -1,4 +1,27 @@
 {
   "edges": [],
-  "nodes": []
+  "nodes": [
+    {
+      "Scene": {
+        "characters_present": [],
+        "file_path": "",
+        "id": "e786ed9b-c9b1-4b62-a089-68ff67694008",
+        "location": null,
+        "summary": "This scene contains no text, characters, or discernible events.",
+        "time": null,
+        "title": "My Novel"
+      }
+    },
+    {
+      "Scene": {
+        "characters_present": [],
+        "file_path": "",
+        "id": "ea92c488-2d2d-4e84-8c96-7d7a1efa7e98",
+        "location": null,
+        "summary": "This scene marks the very beginning of the narrative, serving as a placeholder without introducing any specific characters, plot, or setting yet.",
+        "time": null,
+        "title": "My Novel"
+      }
+    }
+  ]
 }

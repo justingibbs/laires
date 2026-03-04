@@ -12,7 +12,7 @@ pub const MANIFEST_FILE: &str = "manifest.toml";
 pub const SKILLS_DIR: &str = "skills";
 pub const SKILL_LOG_FILE: &str = "skill_log.jsonl";
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
     pub llm: LlmConfig,
     pub project: ProjectMeta,
@@ -24,7 +24,7 @@ pub struct ProjectConfig {
     pub classification: ClassificationConfig,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
     pub provider: String,
     pub model: String,
@@ -34,7 +34,7 @@ pub struct LlmConfig {
     pub base_url: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectMeta {
     pub title: String,
     #[serde(default = "default_format")]
@@ -45,7 +45,7 @@ fn default_format() -> String {
     "prose".to_string()
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisConfig {
     #[serde(default = "default_debounce")]
     pub debounce_ms: u64,
@@ -70,20 +70,20 @@ impl Default for AnalysisConfig {
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PrivacyConfig {
     #[serde(default)]
     pub restricted_when_cloud: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClassificationConfig {
     #[serde(default = "default_classification_model")]
     pub model: String,
 }
 
 fn default_classification_model() -> String {
-    "claude-haiku-4-5-20251001".to_string()
+    String::new() // empty = use the project's main LLM model
 }
 
 impl Default for ClassificationConfig {
@@ -129,6 +129,51 @@ impl ProjectConfig {
             classification: ClassificationConfig::default(),
         }
     }
+}
+
+/// Write or update a KEY=VALUE line in a `.env` file.
+/// Creates the file if it doesn't exist. Updates the value if the key already exists.
+pub fn write_env_file(env_path: &Path, key: &str, value: &str) -> anyhow::Result<()> {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    let new_line = format!("{key}=\"{escaped}\"");
+
+    if env_path.exists() {
+        let content = std::fs::read_to_string(env_path)?;
+        let prefix = format!("{key}=");
+        let mut found = false;
+        let mut lines: Vec<String> = content
+            .lines()
+            .map(|line| {
+                if line.starts_with(&prefix) {
+                    found = true;
+                    new_line.clone()
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect();
+        if !found {
+            lines.push(new_line);
+        }
+        std::fs::write(env_path, lines.join("\n") + "\n")?;
+    } else {
+        std::fs::write(env_path, format!("{new_line}\n"))?;
+    }
+    Ok(())
+}
+
+/// Ensure `.env` is listed in `.gitignore`. Appends it if missing.
+pub fn ensure_gitignore_has_dotenv(project_root: &Path) -> anyhow::Result<()> {
+    let gitignore_path = project_root.join(".gitignore");
+    if gitignore_path.exists() {
+        let content = std::fs::read_to_string(&gitignore_path)?;
+        if !content.lines().any(|line| line.trim() == ".env") {
+            std::fs::write(&gitignore_path, format!("{content}\n.env\n"))?;
+        }
+    } else {
+        std::fs::write(&gitignore_path, ".env\n")?;
+    }
+    Ok(())
 }
 
 /// Resolve the project root by walking up from `start` looking for .laires/

@@ -1,11 +1,11 @@
 mod chat;
 pub(crate) mod diff;
 mod graph;
-mod init;
+pub(crate) mod init;
 mod lint;
 mod log;
 mod perspective;
-mod scan;
+pub(crate) mod scan;
 mod status;
 mod tui;
 
@@ -85,6 +85,13 @@ enum Commands {
         verbose: bool,
     },
 
+    /// Open the desktop GUI
+    Gui {
+        /// Path to a Laires project directory (optional)
+        #[arg(value_name = "PATH")]
+        path: Option<std::path::PathBuf>,
+    },
+
     /// Generate character perspective analysis
     Perspective {
         /// Character name
@@ -132,6 +139,9 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         }
         Commands::Open => {
             tui::run_tui().await?;
+        }
+        Commands::Gui { path } => {
+            crate::gui::run_gui(path).await?;
         }
         Commands::Perspective {
             character,

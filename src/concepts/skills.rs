@@ -381,6 +381,21 @@ impl Skills {
         });
 
         self.register(SkillDefinition {
+            name: "scan_story".to_string(),
+            description: "Analyze all scenes in the manuscript using LLM and populate the narrative graph with characters, objectives, conflicts, and scene metadata. Use this when the graph is empty or when the user asks to scan/analyze their story.".to_string(),
+            category: SkillCategory::GraphTools,
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "full": {
+                        "type": "boolean",
+                        "description": "If true, re-classify all files (like --full flag). Default false."
+                    }
+                }
+            }),
+        });
+
+        self.register(SkillDefinition {
             name: "declare_intent".to_string(),
             description: "Set a writer override on a graph node field, declaring the canonical value".to_string(),
             category: SkillCategory::StructuralTools,
@@ -455,6 +470,11 @@ impl Skills {
             "get_conflicts" => self.exec_get_conflicts(args, ctx.graph),
             "find_dead_scenes" => self.exec_find_dead_scenes(ctx.graph),
             "get_scene_analysis" => self.exec_get_scene_analysis(args, ctx.graph, ctx.scene_map),
+            "scan_story" => {
+                // Handled at the agent level (needs mutable graph access).
+                // This branch should not be reached in the GUI agent.
+                serde_json::json!({ "error": "scan_story must be handled at the agent level" })
+            }
             "get_divergences" => {
                 let intent_ref: Option<&DeclaredIntent> = ctx.intent.as_deref();
                 self.exec_get_divergences(ctx.graph, intent_ref)
