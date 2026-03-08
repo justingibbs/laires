@@ -1,12 +1,13 @@
 use std::io::{self, BufRead, Write};
 
 use crate::concepts::character_perspective::CharacterPerspective;
+use crate::concepts::context_budget::{extract_relevant_ids, summarize_history, ContextReport};
 use crate::concepts::declared_intent::DeclaredIntent;
 use crate::concepts::manifest::Manifest;
 use crate::concepts::narrative_graph::NarrativeGraph;
 use crate::concepts::provider::{Message, Provider, Role, ToolResult};
 use crate::concepts::scene_map::{ParseMode, SceneMap};
-use crate::concepts::skills::{SkillContext, Skills};
+use crate::concepts::skills::{SkillContext, SkillSetContext, Skills};
 use crate::concepts::text_buffer::TextBuffer;
 use crate::config::{
     self, ProjectConfig, CHAT_HISTORY_FILE, LAIRES_DIR, OVERRIDES_FILE, PERSPECTIVES_CACHE_DIR,
@@ -141,8 +142,14 @@ pub async fn run(new_session: bool) -> anyhow::Result<()> {
             break;
         }
 
-        // Assemble context (Sync S4.1)
-        let graph_json = graph.serialize_compact();
+        // Assemble context (Sync S4.1) — use summary/subgraph to reduce token usage (B1/B2)
+        let relevant = extract_relevant_ids(input, &graph);
+        let graph_json = if relevant.is_empty() {
+            graph.serialize_summary()
+        } else {
+            let refs: Vec<&str> = relevant.iter().map(|s| s.as_str()).collect();
+            graph.serialize_subgraph(&refs)
+        };
         let pending = scene_map.get_pending();
         let staleness_note = if pending.is_empty() {
             String::new()
@@ -155,10 +162,14 @@ pub async fn run(new_session: bool) -> anyhow::Result<()> {
 
         // Include divergences in context
         let divs = divergence::detect_divergences(&graph, &intent);
-        let div_note = if divs.is_empty() {
+        let div_json = if divs.is_empty() {
             String::new()
         } else {
-            let div_json = serde_json::to_string(&divs).unwrap_or_default();
+            serde_json::to_string(&divs).unwrap_or_default()
+        };
+        let div_note = if div_json.is_empty() {
+            String::new()
+        } else {
             format!("\n\nActive divergences (inferred vs writer-declared):\n{div_json}")
         };
 
@@ -174,8 +185,9 @@ pub async fn run(new_session: bool) -> anyhow::Result<()> {
             tool_results: None,
         }];
 
-        // Add history
-        messages.extend(history.clone());
+        // Add history — summarize older messages to reduce context usage (C2).
+        let condensed = summarize_history(&history, 6);
+        messages.extend(condensed);
 
         // Add current user message
         messages.push(Message {
@@ -186,7 +198,18 @@ pub async fn run(new_session: bool) -> anyhow::Result<()> {
         });
 
         // Get tool schemas
-        let tool_schemas = skills.tool_schemas();
+        let tool_schemas = skills.tool_schemas_for_context(SkillSetContext::Chat);
+
+        // Context budget report (A1)
+        let context_report = ContextReport::from_chat_request(
+            SYSTEM_PROMPT,
+            &graph_json,
+            &div_json,
+            &history,
+            input,
+            &tool_schemas,
+        );
+        eprintln!("[context] {}", context_report.summary());
 
         // Multi-turn agent loop
         print!("\n");
@@ -204,9 +227,32 @@ pub async fn run(new_session: bool) -> anyhow::Result<()> {
                 .await
             {
                 Ok(response) => {
+                    // Log API usage (A3)
+                    if response.usage.prompt_tokens > 0
+                        || response.usage.completion_tokens > 0
+                    {
+                        eprintln!(
+                            "[usage] {}K prompt / {}K completion tokens",
+                            response.usage.prompt_tokens / 1000,
+                            response.usage.completion_tokens / 1000,
+                        );
+                    }
+
                     if response.tool_calls.is_empty() {
                         // No tool calls — this is the final response
-                        final_text = response.content;
+                        let text = response.content.unwrap_or_default();
+
+                        // Surface empty responses (A2)
+                        if text.is_empty() {
+                            eprintln!(
+                                "Error: LLM returned an empty response. This may \
+                                 indicate the context is too large for the model, \
+                                 a rate limit was hit, or the API returned an error."
+                            );
+                            break;
+                        }
+
+                        final_text = Some(text);
                         break;
                     }
 
@@ -267,7 +313,22 @@ pub async fn run(new_session: bool) -> anyhow::Result<()> {
                     turn_count += 1;
                 }
                 Err(e) => {
-                    eprintln!("Error: {e}");
+                    let err_str = e.to_string();
+                    eprintln!("Error: {err_str}");
+                    // Hint at context size issues
+                    if err_str.contains("too large")
+                        || err_str.contains("context_length")
+                        || err_str.contains("maximum context")
+                        || err_str.contains("token")
+                        || err_str.contains("413")
+                        || err_str.contains("400")
+                    {
+                        eprintln!(
+                            "Hint: estimated context was {}. \
+                             The model may have a smaller context window.",
+                            context_report.summary()
+                        );
+                    }
                     break;
                 }
             }
@@ -278,7 +339,9 @@ pub async fn run(new_session: bool) -> anyhow::Result<()> {
             println!("{text}");
         }
 
-        // Update history with user message + final assistant response
+        // Safety (C1): Only raw user input and final assistant text are stored in
+        // history. Graph context, tool calls, and tool results are never persisted —
+        // they are assembled fresh each turn in the `messages` vec above.
         history.push(Message {
             role: Role::User,
             content: input.to_string(),

@@ -221,6 +221,22 @@ impl GuiApp {
                         }
                     }
                 }
+                AgentEvent::UsageReport {
+                    prompt_tokens,
+                    completion_tokens,
+                    context_estimate,
+                } => {
+                    let usage_str = if prompt_tokens > 0 || completion_tokens > 0 {
+                        format!(
+                            "{}K prompt / {}K completion",
+                            prompt_tokens / 1000,
+                            completion_tokens / 1000,
+                        )
+                    } else {
+                        context_estimate
+                    };
+                    self.gui_state.last_usage = Some(usage_str);
+                }
                 AgentEvent::ConnectionTestResult(success, message) => {
                     if let Some(dialog) = &mut self.settings_dialog {
                         dialog.test_status = Some(if success {

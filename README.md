@@ -24,6 +24,11 @@ This installs the `laires` binary to `~/.cargo/bin/`, which should already be on
 mkdir my-novel && cd my-novel
 ```
 
+Or test story example
+```bash
+cargo run -- gui ~/Projects/laires-test-story
+```
+
 ### 2. Add your API key
 
 Create a `.env` file in the project root:

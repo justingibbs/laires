@@ -4,13 +4,14 @@ use tokio::sync::Mutex;
 use crate::concepts::analysis::{
     apply_analysis_to_graph, Analysis, AnalysisKind, AnalysisTask, Priority,
 };
+use crate::concepts::context_budget::{extract_relevant_ids, summarize_history, ContextReport};
 use crate::concepts::file_buffer_manager::FileBufferManager;
 use crate::concepts::manifest::{
     build_classification_prompt, build_manifest_from_classification, discover_files,
     parse_classification_response, Manifest,
 };
 use crate::concepts::provider::{Message, Provider, Role, ToolResult};
-use crate::concepts::skills::{SkillContext, Skills};
+use crate::concepts::skills::{SkillContext, SkillSetContext, Skills};
 use crate::config::LAIRES_DIR;
 use crate::gui::state::{AgentEvent, GuiRequest};
 use crate::gui::ProjectData;
@@ -113,9 +114,16 @@ pub async fn agent_loop(
                 let _ = events.send(AgentEvent::Thinking);
 
                 // Build context messages (lock domain, then release)
-                let (mut messages, tool_schemas) = {
+                let (mut messages, tool_schemas, context_report) = {
                     let d = domain.lock().await;
-                    let graph_json = d.graph.serialize_compact();
+                    let relevant = extract_relevant_ids(&input, &d.graph);
+                    let graph_json = if relevant.is_empty() {
+                        d.graph.serialize_summary()
+                    } else {
+                        let refs: Vec<&str> =
+                            relevant.iter().map(|s| s.as_str()).collect();
+                        d.graph.serialize_subgraph(&refs)
+                    };
                     let pending = d.scene_map.get_pending();
                     let staleness_note = if pending.is_empty() {
                         String::new()
@@ -126,10 +134,14 @@ pub async fn agent_loop(
                         )
                     };
                     let divs = divergence::detect_divergences(&d.graph, &d.intent);
-                    let div_note = if divs.is_empty() {
+                    let div_json = if divs.is_empty() {
                         String::new()
                     } else {
-                        let div_json = serde_json::to_string(&divs).unwrap_or_default();
+                        serde_json::to_string(&divs).unwrap_or_default()
+                    };
+                    let div_note = if div_json.is_empty() {
+                        String::new()
+                    } else {
                         format!("\n\nActive divergences:\n{div_json}")
                     };
                     let context_msg = format!(
@@ -142,7 +154,9 @@ pub async fn agent_loop(
                         tool_calls: None,
                         tool_results: None,
                     }];
-                    msgs.extend(llm_history.clone());
+                    // Summarize older history to reduce context usage (C2).
+                    let condensed = summarize_history(&llm_history, 6);
+                    msgs.extend(condensed);
                     msgs.push(Message {
                         role: Role::User,
                         content: input.clone(),
@@ -150,10 +164,22 @@ pub async fn agent_loop(
                         tool_results: None,
                     });
 
-                    let schemas = skills.tool_schemas();
-                    (msgs, schemas)
+                    let schemas = skills.tool_schemas_for_context(SkillSetContext::Chat);
+
+                    let report = ContextReport::from_chat_request(
+                        SYSTEM_PROMPT,
+                        &graph_json,
+                        &div_json,
+                        &llm_history,
+                        &input,
+                        &schemas,
+                    );
+
+                    (msgs, schemas, report)
                 };
                 // Domain lock released
+
+                eprintln!("[context] {}", context_report.summary());
 
                 // Multi-turn agent loop
                 let mut turn_count = 0;
@@ -172,13 +198,37 @@ pub async fn agent_loop(
                         .await
                     {
                         Ok(response) => {
+                            // Emit usage report (A3)
+                            let _ = events.send(AgentEvent::UsageReport {
+                                prompt_tokens: response.usage.prompt_tokens,
+                                completion_tokens: response.usage.completion_tokens,
+                                context_estimate: context_report.summary(),
+                            });
+
                             if response.tool_calls.is_empty() {
                                 // Final text response
                                 let text = response.content.unwrap_or_default();
+
+                                // Surface empty responses (A2)
+                                if text.is_empty() {
+                                    let _ = events.send(AgentEvent::Error(
+                                        "LLM returned an empty response. This may indicate \
+                                         the context is too large for the model, a rate limit \
+                                         was hit, or the API returned an error. Check provider \
+                                         logs."
+                                            .to_string(),
+                                    ));
+                                    let _ = events.send(AgentEvent::Idle);
+                                    break;
+                                }
+
                                 let _ = events.send(AgentEvent::Response(text.clone()));
                                 let _ = events.send(AgentEvent::Idle);
 
-                                // Update LLM history
+                                // Safety (C1): Only raw user input and final assistant
+                                // text are stored in llm_history. Graph context, tool
+                                // calls, and tool results accumulate in the `messages`
+                                // vec during the multi-turn loop but are never persisted.
                                 llm_history.push(Message {
                                     role: Role::User,
                                     content: input.clone(),
@@ -279,7 +329,24 @@ pub async fn agent_loop(
                             turn_count += 1;
                         }
                         Err(e) => {
-                            let _ = events.send(AgentEvent::Error(format!("LLM error: {e}")));
+                            let err_str = e.to_string();
+                            let hint = if err_str.contains("too large")
+                                || err_str.contains("context_length")
+                                || err_str.contains("maximum context")
+                                || err_str.contains("token")
+                                || err_str.contains("413")
+                                || err_str.contains("400")
+                            {
+                                format!(
+                                    " (estimated context: {})",
+                                    context_report.summary()
+                                )
+                            } else {
+                                String::new()
+                            };
+                            let _ = events.send(AgentEvent::Error(format!(
+                                "LLM error: {err_str}{hint}"
+                            )));
                             let _ = events.send(AgentEvent::Idle);
                             break;
                         }

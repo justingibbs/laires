@@ -2,7 +2,7 @@ use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use uuid::Uuid;
 
@@ -468,6 +468,146 @@ impl NarrativeGraph {
     /// Get edge count
     pub fn edge_count(&self) -> usize {
         self.graph.edge_count()
+    }
+
+    /// Compact summary: names and IDs only, no descriptions/evidence/summaries.
+    /// ~5-10% the size of serialize_compact(). The LLM can use query_graph or
+    /// get_scene_analysis tools to access full details.
+    pub fn serialize_summary(&self) -> String {
+        let characters: Vec<_> = self
+            .get_characters()
+            .iter()
+            .filter_map(|n| {
+                if let GraphNode::Character { id, name, .. } = n {
+                    Some(serde_json::json!({ "id": id, "name": name }))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let scenes: Vec<_> = self
+            .get_scenes()
+            .iter()
+            .filter_map(|n| {
+                if let GraphNode::Scene {
+                    id,
+                    title,
+                    characters_present,
+                    ..
+                } = n
+                {
+                    Some(serde_json::json!({
+                        "id": id,
+                        "title": title,
+                        "characters": characters_present,
+                    }))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let objectives: Vec<_> = self
+            .get_objectives()
+            .iter()
+            .filter_map(|n| {
+                if let GraphNode::Objective {
+                    id,
+                    description,
+                    status,
+                    ..
+                } = n
+                {
+                    Some(serde_json::json!({ "id": id, "label": description, "status": status }))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let conflicts: Vec<_> = self
+            .get_conflicts()
+            .iter()
+            .filter_map(|n| {
+                if let GraphNode::Conflict {
+                    id, description, ..
+                } = n
+                {
+                    Some(serde_json::json!({ "id": id, "label": description }))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        serde_json::to_string(&serde_json::json!({
+            "characters": characters,
+            "scenes": scenes,
+            "objectives": objectives,
+            "conflicts": conflicts,
+            "edge_count": self.edge_count(),
+            "note": "This is a summary. Use query_graph or get_scene_analysis tools for full details."
+        }))
+        .unwrap_or_default()
+    }
+
+    /// Serialize only nodes matching the given IDs + their 1-hop neighbors,
+    /// plus all edges between included nodes.
+    pub fn serialize_subgraph(&self, node_ids: &[&str]) -> String {
+        let mut included: HashSet<NodeIndex> = HashSet::new();
+
+        // Add seed nodes
+        for id in node_ids {
+            if let Some(&idx) = self.index_map.get(*id) {
+                included.insert(idx);
+            }
+        }
+
+        // Add 1-hop neighbors
+        let seeds: Vec<NodeIndex> = included.iter().copied().collect();
+        for idx in seeds {
+            for edge in self.graph.edges_directed(idx, Direction::Outgoing) {
+                included.insert(edge.target());
+            }
+            for edge in self.graph.edges_directed(idx, Direction::Incoming) {
+                included.insert(edge.source());
+            }
+        }
+
+        // Serialize included nodes
+        let nodes: Vec<&GraphNode> = included
+            .iter()
+            .filter_map(|&idx| self.graph.node_weight(idx))
+            .collect();
+
+        // Serialize edges between included nodes
+        let edges: Vec<SerializedEdge> = self
+            .graph
+            .edge_indices()
+            .filter_map(|ei| {
+                let (from, to) = self.graph.edge_endpoints(ei)?;
+                if included.contains(&from) && included.contains(&to) {
+                    let from_node = &self.graph[from];
+                    let to_node = &self.graph[to];
+                    let edge = self.graph.edge_weight(ei)?;
+                    Some(SerializedEdge {
+                        from: from_node.node_id().to_string(),
+                        to: to_node.node_id().to_string(),
+                        edge: edge.clone(),
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        serde_json::to_string(&serde_json::json!({
+            "nodes": nodes,
+            "edges": edges,
+            "note": "Subgraph for relevant nodes. Use query_graph or get_scene_analysis tools for other nodes."
+        }))
+        .unwrap_or_default()
     }
 
     /// Serialize to JSON
@@ -1212,5 +1352,178 @@ mod tests {
             g.get_node_field("scene-old", "file_path").unwrap(),
             ""
         );
+    }
+
+    #[test]
+    fn test_serialize_summary_compact() {
+        let mut g = NarrativeGraph::new();
+
+        g.add_node(GraphNode::Character {
+            id: "char-1".to_string(),
+            name: "Alice".to_string(),
+            aliases: vec!["Ali".to_string()],
+            description: Some("A very long description that should be excluded from the summary to save tokens.".to_string()),
+        });
+        g.add_node(GraphNode::Scene {
+            id: "scene-1".to_string(),
+            title: Some("The Opening".to_string()),
+            summary: "A long scene summary that should not appear in the compact output.".to_string(),
+            characters_present: vec!["char-1".to_string()],
+            location: Some("New York".to_string()),
+            time: Some("Morning".to_string()),
+            file_path: "chapter1.md".to_string(),
+        });
+        g.add_node(GraphNode::Objective {
+            id: "obj-1".to_string(),
+            character_id: "char-1".to_string(),
+            scope: Scope::Overarching,
+            description: "Survive".to_string(),
+            evidence: vec!["lots of evidence text".to_string()],
+            confidence: 0.9,
+            status: Status::Active,
+        });
+        g.add_node(GraphNode::Conflict {
+            id: "conf-1".to_string(),
+            description: "Internal struggle".to_string(),
+            objectives: vec!["obj-1".to_string()],
+        });
+        g.add_edge("char-1", "obj-1", GraphEdge::Pursues { scene_id: None });
+
+        let summary = g.serialize_summary();
+        let compact = g.serialize_compact();
+
+        // Summary should be significantly smaller
+        assert!(
+            summary.len() < compact.len(),
+            "summary ({}) should be smaller than compact ({})",
+            summary.len(),
+            compact.len()
+        );
+
+        // Summary should contain names/IDs but not descriptions/evidence
+        let parsed: serde_json::Value = serde_json::from_str(&summary).unwrap();
+        assert_eq!(parsed["characters"][0]["name"], "Alice");
+        assert_eq!(parsed["characters"][0]["id"], "char-1");
+        assert!(parsed["characters"][0].get("description").is_none());
+        assert!(parsed["characters"][0].get("aliases").is_none());
+
+        assert_eq!(parsed["scenes"][0]["title"], "The Opening");
+        assert!(parsed["scenes"][0].get("summary").is_none());
+        assert!(parsed["scenes"][0].get("location").is_none());
+
+        assert_eq!(parsed["objectives"][0]["label"], "Survive");
+        assert_eq!(parsed["objectives"][0]["status"], "Active");
+        assert!(parsed["objectives"][0].get("evidence").is_none());
+        assert!(parsed["objectives"][0].get("confidence").is_none());
+
+        assert_eq!(parsed["conflicts"][0]["label"], "Internal struggle");
+        assert_eq!(parsed["edge_count"], 1);
+        assert!(parsed["note"].as_str().unwrap().contains("summary"));
+    }
+
+    #[test]
+    fn test_serialize_summary_empty_graph() {
+        let g = NarrativeGraph::new();
+        let summary = g.serialize_summary();
+        let parsed: serde_json::Value = serde_json::from_str(&summary).unwrap();
+        assert_eq!(parsed["characters"].as_array().unwrap().len(), 0);
+        assert_eq!(parsed["scenes"].as_array().unwrap().len(), 0);
+        assert_eq!(parsed["edge_count"], 0);
+    }
+
+    #[test]
+    fn test_serialize_subgraph_includes_neighbors() {
+        let mut g = NarrativeGraph::new();
+
+        g.add_node(GraphNode::Character {
+            id: "alice".to_string(),
+            name: "Alice".to_string(),
+            aliases: vec![],
+            description: Some("Protagonist".to_string()),
+        });
+        g.add_node(GraphNode::Character {
+            id: "bob".to_string(),
+            name: "Bob".to_string(),
+            aliases: vec![],
+            description: None,
+        });
+        g.add_node(GraphNode::Character {
+            id: "charlie".to_string(),
+            name: "Charlie".to_string(),
+            aliases: vec![],
+            description: None,
+        });
+        g.add_node(GraphNode::Scene {
+            id: "scene-1".to_string(),
+            title: Some("Meeting".to_string()),
+            summary: "Alice meets Bob".to_string(),
+            characters_present: vec!["alice".to_string(), "bob".to_string()],
+            location: None,
+            time: None,
+            file_path: String::new(),
+        });
+        g.add_node(GraphNode::Scene {
+            id: "scene-2".to_string(),
+            title: Some("Solo".to_string()),
+            summary: "Charlie alone".to_string(),
+            characters_present: vec!["charlie".to_string()],
+            location: None,
+            time: None,
+            file_path: String::new(),
+        });
+
+        // Alice -> scene-1, Bob -> scene-1, Charlie -> scene-2
+        g.add_edge("alice", "scene-1", GraphEdge::PresentIn);
+        g.add_edge("bob", "scene-1", GraphEdge::PresentIn);
+        g.add_edge("charlie", "scene-2", GraphEdge::PresentIn);
+
+        // Query just Alice — should include Alice + scene-1 (neighbor) + Bob (neighbor of scene-1? no, only 1-hop from alice)
+        let subgraph = g.serialize_subgraph(&["alice"]);
+        let parsed: serde_json::Value = serde_json::from_str(&subgraph).unwrap();
+        let nodes = parsed["nodes"].as_array().unwrap();
+
+        // Alice (seed) + scene-1 (1-hop neighbor via PresentIn)
+        let node_ids: Vec<&str> = nodes
+            .iter()
+            .map(|n| {
+                n.get("Character")
+                    .and_then(|c| c["id"].as_str())
+                    .or_else(|| n.get("Scene").and_then(|s| s["id"].as_str()))
+                    .unwrap()
+            })
+            .collect();
+        assert!(node_ids.contains(&"alice"));
+        assert!(node_ids.contains(&"scene-1"));
+        // Charlie and scene-2 should NOT be included
+        assert!(!node_ids.contains(&"charlie"));
+        assert!(!node_ids.contains(&"scene-2"));
+
+        // Edges between included nodes should be present
+        let edges = parsed["edges"].as_array().unwrap();
+        assert!(!edges.is_empty());
+    }
+
+    #[test]
+    fn test_serialize_subgraph_empty_ids() {
+        let mut g = NarrativeGraph::new();
+        g.add_node(GraphNode::Character {
+            id: "c1".to_string(),
+            name: "Test".to_string(),
+            aliases: vec![],
+            description: None,
+        });
+
+        let subgraph = g.serialize_subgraph(&[]);
+        let parsed: serde_json::Value = serde_json::from_str(&subgraph).unwrap();
+        assert_eq!(parsed["nodes"].as_array().unwrap().len(), 0);
+        assert_eq!(parsed["edges"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_serialize_subgraph_nonexistent_id() {
+        let g = NarrativeGraph::new();
+        let subgraph = g.serialize_subgraph(&["nonexistent"]);
+        let parsed: serde_json::Value = serde_json::from_str(&subgraph).unwrap();
+        assert_eq!(parsed["nodes"].as_array().unwrap().len(), 0);
     }
 }

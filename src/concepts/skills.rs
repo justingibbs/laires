@@ -34,6 +34,17 @@ pub enum SkillCategory {
     CustomTools,
 }
 
+/// Context for selecting which tool schemas to include in LLM requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillSetContext {
+    /// Chat mode: all tools available.
+    Chat,
+    /// Analysis mode: no tools needed (LLM generates structured output).
+    Analysis,
+    /// Perspective mode: only PerspectiveTools and GraphTools.
+    Perspective,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Execution {
     pub skill_name: String,
@@ -105,7 +116,7 @@ impl Skills {
         // File Tools
         self.register(SkillDefinition {
             name: "story_grep".to_string(),
-            description: "Search story text by regex or keyword".to_string(),
+            description: "Search story text by regex pattern.".to_string(),
             category: SkillCategory::FileTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -118,7 +129,7 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "read_scene".to_string(),
-            description: "Read the full text of a specific scene by ID or number".to_string(),
+            description: "Read a scene's full text by ID or number.".to_string(),
             category: SkillCategory::FileTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -131,7 +142,7 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "list_scenes".to_string(),
-            description: "List all scenes with their titles and word counts".to_string(),
+            description: "List all scenes with titles and word counts.".to_string(),
             category: SkillCategory::FileTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -141,7 +152,7 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "story_stats".to_string(),
-            description: "Get overall manuscript statistics (word count, scene count, character count)".to_string(),
+            description: "Get manuscript statistics: word, scene, and character counts.".to_string(),
             category: SkillCategory::FileTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -151,7 +162,7 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "read_context_file".to_string(),
-            description: "Read a supporting file (outline, characters, notes) by path or role".to_string(),
+            description: "Read a context file (outline, characters, notes) by path or role.".to_string(),
             category: SkillCategory::FileTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -164,7 +175,7 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "list_files".to_string(),
-            description: "List all files in the manifest with roles and metadata".to_string(),
+            description: "List all project files with roles and metadata.".to_string(),
             category: SkillCategory::FileTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -175,7 +186,7 @@ impl Skills {
         // Graph Tools
         self.register(SkillDefinition {
             name: "query_graph".to_string(),
-            description: "Query the narrative graph with filters (by character, scene, type)".to_string(),
+            description: "Query the narrative graph by node type or character.".to_string(),
             category: SkillCategory::GraphTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -188,7 +199,7 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "get_character_arc".to_string(),
-            description: "Get the full objective trajectory for a character across all scenes".to_string(),
+            description: "Get a character's objective trajectory across scenes.".to_string(),
             category: SkillCategory::GraphTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -201,7 +212,7 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "get_conflicts".to_string(),
-            description: "Get all objective conflicts, optionally filtered by character".to_string(),
+            description: "Get objective conflicts, optionally filtered by character.".to_string(),
             category: SkillCategory::GraphTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -213,7 +224,7 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "find_dead_scenes".to_string(),
-            description: "Find scenes where no objective advances or is blocked".to_string(),
+            description: "Find scenes with no objective progress.".to_string(),
             category: SkillCategory::GraphTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -224,7 +235,7 @@ impl Skills {
         // New Graph Tools
         self.register(SkillDefinition {
             name: "get_scene_analysis".to_string(),
-            description: "Get which objectives are active, advanced, or blocked in a scene".to_string(),
+            description: "Get objective activity for a scene.".to_string(),
             category: SkillCategory::GraphTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -237,7 +248,7 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "get_divergences".to_string(),
-            description: "Get all mismatches between LLM-inferred and writer-declared values".to_string(),
+            description: "Get mismatches between inferred and declared values.".to_string(),
             category: SkillCategory::GraphTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -248,7 +259,7 @@ impl Skills {
         // Perspective Tools
         self.register(SkillDefinition {
             name: "interpret_as_character".to_string(),
-            description: "Analyze the story or a scene from a specific character's perspective".to_string(),
+            description: "Analyze the story from a character's perspective.".to_string(),
             category: SkillCategory::PerspectiveTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -262,7 +273,7 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "compare_perspectives".to_string(),
-            description: "Compare how two characters experience the same scene differently".to_string(),
+            description: "Compare two characters' perspectives on a scene.".to_string(),
             category: SkillCategory::PerspectiveTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -277,7 +288,7 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "find_blind_spots".to_string(),
-            description: "Find dramatic irony moments where a character is missing information the reader has".to_string(),
+            description: "Find dramatic irony where a character lacks reader knowledge.".to_string(),
             category: SkillCategory::PerspectiveTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -290,7 +301,7 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "get_knowledge_at".to_string(),
-            description: "Get what a character knows at a given point in the story".to_string(),
+            description: "Get a character's knowledge at a story point.".to_string(),
             category: SkillCategory::PerspectiveTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -305,7 +316,7 @@ impl Skills {
         // Structural Tools
         self.register(SkillDefinition {
             name: "story_lint".to_string(),
-            description: "Run consistency checks: orphaned objectives, dead scenes, stale analysis, presence edge consistency".to_string(),
+            description: "Run consistency checks on the narrative graph.".to_string(),
             category: SkillCategory::StructuralTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -315,7 +326,7 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "pacing_analysis".to_string(),
-            description: "Analyze scene lengths, conflict density, and narrative rhythm".to_string(),
+            description: "Analyze pacing: scene lengths and conflict density.".to_string(),
             category: SkillCategory::StructuralTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -325,7 +336,7 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "arc_completeness".to_string(),
-            description: "Check whether character objectives resolve by the end of the story".to_string(),
+            description: "Check if character objectives resolve by story end.".to_string(),
             category: SkillCategory::StructuralTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -338,7 +349,7 @@ impl Skills {
         // Canvas Tools
         self.register(SkillDefinition {
             name: "write_to_canvas".to_string(),
-            description: "Insert text at a byte position in the story".to_string(),
+            description: "Insert text at a byte position.".to_string(),
             category: SkillCategory::CanvasTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -352,7 +363,7 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "replace_in_canvas".to_string(),
-            description: "Replace text in a byte range in the story".to_string(),
+            description: "Replace text in a byte range.".to_string(),
             category: SkillCategory::CanvasTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -367,7 +378,7 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "insert_scene".to_string(),
-            description: "Insert a new scene break marker and content at a byte position".to_string(),
+            description: "Insert a new scene break and content.".to_string(),
             category: SkillCategory::CanvasTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -382,7 +393,7 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "scan_story".to_string(),
-            description: "Analyze all scenes in the manuscript using LLM and populate the narrative graph with characters, objectives, conflicts, and scene metadata. Use this when the graph is empty or when the user asks to scan/analyze their story.".to_string(),
+            description: "Scan and analyze all scenes to populate the narrative graph.".to_string(),
             category: SkillCategory::GraphTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -397,7 +408,7 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "declare_intent".to_string(),
-            description: "Set a writer override on a graph node field, declaring the canonical value".to_string(),
+            description: "Declare a writer override on a graph node field.".to_string(),
             category: SkillCategory::StructuralTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -413,7 +424,7 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "retract_intent".to_string(),
-            description: "Remove a writer override from a graph node field".to_string(),
+            description: "Remove a writer override from a graph node field.".to_string(),
             category: SkillCategory::StructuralTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -539,6 +550,35 @@ impl Skills {
         self.registry
             .values()
             .filter(|s| self.is_permitted(&s.name))
+            .map(|s| crate::concepts::provider::ToolSchema {
+                name: s.name.clone(),
+                description: s.description.clone(),
+                parameters: s.input_schema.clone(),
+            })
+            .collect()
+    }
+
+    /// Get tool schemas filtered by context. Different operations need different tools.
+    pub fn tool_schemas_for_context(
+        &self,
+        context: SkillSetContext,
+    ) -> Vec<crate::concepts::provider::ToolSchema> {
+        let allowed_categories: Option<Vec<SkillCategory>> = match context {
+            SkillSetContext::Chat => None, // all tools
+            SkillSetContext::Analysis => Some(vec![]), // no tools
+            SkillSetContext::Perspective => Some(vec![
+                SkillCategory::PerspectiveTools,
+                SkillCategory::GraphTools,
+            ]),
+        };
+
+        self.registry
+            .values()
+            .filter(|s| self.is_permitted(&s.name))
+            .filter(|s| match &allowed_categories {
+                None => true,
+                Some(cats) => cats.contains(&s.category),
+            })
             .map(|s| crate::concepts::provider::ToolSchema {
                 name: s.name.clone(),
                 description: s.description.clone(),
@@ -1174,7 +1214,7 @@ impl Skills {
         } else {
             // Full perspective
             match perspectives
-                .generate_perspective(&char_id, ctx.graph, ctx.text_buffer, ctx.scene_map, provider)
+                .generate_perspective(&char_id, ctx.graph, provider)
                 .await
             {
                 Ok(p) => serde_json::json!(p),
@@ -1282,7 +1322,7 @@ impl Skills {
         };
 
         match perspectives
-            .find_blind_spots(&char_id, ctx.graph, ctx.text_buffer, ctx.scene_map, provider)
+            .find_blind_spots(&char_id, ctx.graph, provider)
             .await
         {
             Ok(spots) => serde_json::json!({
@@ -2752,5 +2792,81 @@ description = "Text to analyze"
         assert_eq!(schema.description, "Analyze the tone of a passage");
         assert_eq!(schema.parameters["type"], "object");
         assert_eq!(schema.parameters["properties"]["text"]["type"], "string");
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase E: tool_schemas_for_context tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_tool_schemas_for_context_chat_returns_all() {
+        let skills = Skills::new();
+        let all = skills.tool_schemas();
+        let chat = skills.tool_schemas_for_context(SkillSetContext::Chat);
+        assert_eq!(chat.len(), all.len());
+    }
+
+    #[test]
+    fn test_tool_schemas_for_context_analysis_returns_empty() {
+        let skills = Skills::new();
+        let analysis = skills.tool_schemas_for_context(SkillSetContext::Analysis);
+        assert!(analysis.is_empty());
+    }
+
+    #[test]
+    fn test_tool_schemas_for_context_perspective_filters() {
+        let skills = Skills::new();
+        let perspective = skills.tool_schemas_for_context(SkillSetContext::Perspective);
+
+        // Should contain PerspectiveTools and GraphTools only
+        assert!(!perspective.is_empty());
+
+        // Verify all returned schemas are in the allowed categories
+        let perspective_names: Vec<&str> = vec![
+            "interpret_as_character",
+            "compare_perspectives",
+            "find_blind_spots",
+            "get_knowledge_at",
+        ];
+        let graph_names: Vec<&str> = vec![
+            "query_graph",
+            "get_character_arc",
+            "get_conflicts",
+            "find_dead_scenes",
+            "get_scene_analysis",
+            "get_divergences",
+            "scan_story",
+        ];
+        let allowed: Vec<&str> = perspective_names
+            .iter()
+            .chain(graph_names.iter())
+            .copied()
+            .collect();
+
+        for schema in &perspective {
+            assert!(
+                allowed.contains(&schema.name.as_str()),
+                "Unexpected tool in Perspective context: {}",
+                schema.name
+            );
+        }
+
+        // Should NOT contain file tools, structural tools, or canvas tools
+        assert!(!perspective.iter().any(|s| s.name == "story_grep"));
+        assert!(!perspective.iter().any(|s| s.name == "read_scene"));
+        assert!(!perspective.iter().any(|s| s.name == "story_lint"));
+        assert!(!perspective.iter().any(|s| s.name == "write_to_canvas"));
+    }
+
+    #[test]
+    fn test_tool_schemas_for_context_respects_permissions() {
+        let mut skills = Skills::new();
+        skills.set_permission("query_graph", Permission::Disabled);
+
+        let perspective = skills.tool_schemas_for_context(SkillSetContext::Perspective);
+        assert!(!perspective.iter().any(|s| s.name == "query_graph"));
+
+        let chat = skills.tool_schemas_for_context(SkillSetContext::Chat);
+        assert!(!chat.iter().any(|s| s.name == "query_graph"));
     }
 }

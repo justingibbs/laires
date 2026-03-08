@@ -60,6 +60,16 @@ pub fn render(ctx: &egui::Context, state: &GuiState, theme: &LairesTheme) {
                         .small(),
                 );
 
+                // Token usage from last request
+                if let Some(usage) = &state.last_usage {
+                    ui.label(RichText::new("|").color(theme.text_secondary).small());
+                    ui.label(
+                        RichText::new(usage)
+                            .color(theme.text_secondary)
+                            .small(),
+                    );
+                }
+
                 // Right-aligned: gear icon + agent status
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Settings button (rightmost)

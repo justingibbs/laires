@@ -1,6 +1,7 @@
 pub mod analysis;
 pub mod canvas;
 pub mod character_perspective;
+pub mod context_budget;
 pub mod declared_intent;
 pub mod docx;
 pub mod file_buffer_manager;

@@ -36,6 +36,11 @@ pub enum AgentEvent {
     Idle,
     StateChanged,
     ConnectionTestResult(bool, String),
+    UsageReport {
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        context_estimate: String,
+    },
 }
 
 /// Messages from GUI -> agent
@@ -87,6 +92,9 @@ pub struct GuiState {
     pub scene_count: usize,
     pub char_count: usize,
     pub word_count: usize,
+
+    // Token usage from last LLM request
+    pub last_usage: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,6 +165,7 @@ impl Default for GuiState {
             scene_count: 0,
             char_count: 0,
             word_count: 0,
+            last_usage: None,
         }
     }
 }

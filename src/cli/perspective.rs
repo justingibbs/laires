@@ -159,7 +159,7 @@ pub async fn run(
         println!("Generating full perspective for {}...\n", character);
 
         let perspective = perspectives
-            .generate_perspective(&char_id, &graph, &text_buffer, &scene_map, &mut provider)
+            .generate_perspective(&char_id, &graph, &mut provider)
             .await?;
 
         if json_output {
