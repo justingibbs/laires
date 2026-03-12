@@ -18,6 +18,10 @@ laires scan
 
 ---
 
+need to check on LLM language part of the app.
+
+---
+
 # Need to address stuffing context
 
   Issue 2: Chat Not Working

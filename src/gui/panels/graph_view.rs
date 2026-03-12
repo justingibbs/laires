@@ -1,18 +1,21 @@
 use std::collections::HashMap;
 
-use eframe::egui::{self, Color32, Pos2, Rect, RichText, Stroke, Vec2};
-use petgraph::visit::EdgeRef;
+use eframe::egui::{self, Color32, CornerRadius, Pos2, Rect, RichText, Stroke, Vec2};
 
-use crate::concepts::narrative_graph::{GraphEdge, GraphNode};
 use crate::gui::state::GuiState;
 use crate::gui::theme::LairesTheme;
 use crate::gui::ProjectSnapshot;
 
 const NODE_RADIUS: f32 = 20.0;
+const NODE_BORDER: f32 = 2.0;
 const REPULSION: f32 = 8000.0;
 const ATTRACTION: f32 = 0.01;
 const DAMPING: f32 = 0.85;
 const REST_LENGTH: f32 = 150.0;
+const EDGE_WIDTH: f32 = 1.5;
+const EDGE_COLOR_ALPHA: u8 = 100;
+const HOVER_GLOW_EXTRA: f32 = 8.0;
+const HOVER_GLOW_ALPHA: u8 = 40;
 
 /// Per-node layout state for force-directed positioning.
 #[derive(Clone)]
@@ -39,6 +42,8 @@ pub struct GraphLayoutState {
     initialized: bool,
     /// Number of simulation steps completed.
     steps: usize,
+    /// Hovered node index (for glow effect).
+    hovered_node: Option<usize>,
 }
 
 impl Default for GraphLayoutState {
@@ -51,6 +56,7 @@ impl Default for GraphLayoutState {
             zoom: 1.0,
             initialized: false,
             steps: 0,
+            hovered_node: None,
         }
     }
 }
@@ -62,8 +68,8 @@ impl GraphLayoutState {
         self.id_to_idx.clear();
         self.edges.clear();
         self.steps = 0;
+        self.hovered_node = None;
 
-        // Add nodes with initial circular placement
         let n = snapshot.graph_nodes.len();
         for (i, gn) in snapshot.graph_nodes.iter().enumerate() {
             let angle = (i as f32 / n.max(1) as f32) * std::f32::consts::TAU;
@@ -80,7 +86,6 @@ impl GraphLayoutState {
             });
         }
 
-        // Add edges
         for ge in &snapshot.graph_edges {
             if let (Some(&src), Some(&dst)) =
                 (self.id_to_idx.get(&ge.source), self.id_to_idx.get(&ge.target))
@@ -124,7 +129,6 @@ impl GraphLayoutState {
         // Apply forces
         for (i, node) in self.nodes.iter_mut().enumerate() {
             node.vel = (node.vel + forces[i]) * DAMPING;
-            // Clamp velocity
             let max_vel = 10.0;
             if node.vel.length() > max_vel {
                 node.vel = node.vel.normalized() * max_vel;
@@ -171,7 +175,7 @@ pub fn render(
         if snap.graph_nodes.is_empty() {
             ui.centered_and_justified(|ui| {
                 ui.label(
-                    RichText::new("Graph is empty. Run `laires scan` to analyze your story.")
+                    RichText::new("Graph is empty. Run Scan to analyze your story.")
                         .color(theme.text_secondary)
                         .italics(),
                 );
@@ -185,7 +189,7 @@ pub fn render(
             state.graph_needs_rebuild = false;
         }
 
-        // Run simulation steps (more at start, fewer once settled)
+        // Run simulation steps
         if layout.steps < 200 {
             let steps_per_frame = if layout.steps < 50 { 5 } else { 1 };
             for _ in 0..steps_per_frame {
@@ -200,6 +204,9 @@ pub fn render(
             ui.allocate_painter(available, egui::Sense::click_and_drag());
         let rect = response.rect;
         let center = rect.center();
+
+        // Background fill (slightly lighter than panel)
+        painter.rect_filled(rect, CornerRadius::same(0), theme.bg_secondary);
 
         // Handle pan (drag)
         if response.dragged() {
@@ -222,16 +229,59 @@ pub fn render(
             )
         };
 
-        // Draw edges
+        // Edge color (softer)
+        let edge_color = Color32::from_rgba_premultiplied(
+            0xCE, 0xD4, 0xDA, EDGE_COLOR_ALPHA,
+        );
+
+        // === Draw edges as quadratic bezier curves ===
         for &(src, dst, ref _label) in &layout.edges {
             let p1 = world_to_screen(layout.nodes[src].pos);
             let p2 = world_to_screen(layout.nodes[dst].pos);
-            if rect.contains(p1) || rect.contains(p2) {
-                painter.line_segment([p1, p2], Stroke::new(1.0, theme.border));
+
+            if !rect.contains(p1) && !rect.contains(p2) {
+                continue;
+            }
+
+            // Compute a control point offset perpendicular to the edge
+            let mid = Pos2::new((p1.x + p2.x) / 2.0, (p1.y + p2.y) / 2.0);
+            let dx = p2.x - p1.x;
+            let dy = p2.y - p1.y;
+            let len = (dx * dx + dy * dy).sqrt().max(1.0);
+            // Perpendicular offset scaled by edge length
+            let offset_amount = (len * 0.12).clamp(8.0, 40.0);
+            let ctrl = Pos2::new(
+                mid.x + (-dy / len) * offset_amount,
+                mid.y + (dx / len) * offset_amount,
+            );
+
+            // Draw quadratic bezier as line segments
+            let segments = 16;
+            let stroke = Stroke::new(EDGE_WIDTH, edge_color);
+            for s in 0..segments {
+                let t0 = s as f32 / segments as f32;
+                let t1 = (s + 1) as f32 / segments as f32;
+                let a = quadratic_bezier(p1, ctrl, p2, t0);
+                let b = quadratic_bezier(p1, ctrl, p2, t1);
+                painter.line_segment([a, b], stroke);
             }
         }
 
-        // Draw nodes
+        // === Hover detection (before drawing nodes so we know which to glow) ===
+        let pointer_pos = response.hover_pos();
+        layout.hovered_node = None;
+        if let Some(pp) = pointer_pos {
+            for (i, node) in layout.nodes.iter().enumerate() {
+                let screen_pos = world_to_screen(node.pos);
+                let r = NODE_RADIUS * layout.zoom;
+                if screen_pos.distance(pp) <= r + 4.0 {
+                    layout.hovered_node = Some(i);
+                    break;
+                }
+            }
+        }
+
+        // === Draw nodes ===
         let mut clicked_node = None;
         for (i, node) in layout.nodes.iter().enumerate() {
             let screen_pos = world_to_screen(node.pos);
@@ -241,24 +291,58 @@ pub fn render(
 
             let color = node_color(&node.node_type, theme);
             let is_selected = state.selected_node_id.as_deref() == Some(&node.node_id);
+            let is_hovered = layout.hovered_node == Some(i);
             let r = NODE_RADIUS * layout.zoom;
 
-            // Node circle
-            if is_selected {
-                painter.circle_filled(screen_pos, r + 3.0, theme.accent);
+            // Hover glow — soft larger circle behind
+            if is_hovered && !is_selected {
+                let glow_color = Color32::from_rgba_premultiplied(
+                    color.r(),
+                    color.g(),
+                    color.b(),
+                    HOVER_GLOW_ALPHA,
+                );
+                painter.circle_filled(screen_pos, r + HOVER_GLOW_EXTRA * layout.zoom, glow_color);
             }
+
+            // Selection ring
+            if is_selected {
+                painter.circle_filled(screen_pos, r + 4.0, theme.accent);
+            }
+
+            // Node fill
             painter.circle_filled(screen_pos, r, color);
 
-            // Label
-            let font = egui::FontId::proportional(11.0 * layout.zoom.max(0.5));
-            let label_pos = Pos2::new(screen_pos.x, screen_pos.y + r + 8.0);
-            painter.text(
-                label_pos,
-                egui::Align2::CENTER_TOP,
-                &node.label,
-                font,
-                theme.text_primary,
+            // White border
+            painter.circle_stroke(
+                screen_pos,
+                r,
+                Stroke::new(NODE_BORDER, Color32::WHITE),
             );
+
+            // Label — try to fit short labels inside the node, longer ones below
+            let font_size = (11.0 * layout.zoom).clamp(7.0, 16.0);
+            let font = egui::FontId::proportional(font_size);
+            if node.label.len() <= 6 && layout.zoom >= 0.6 {
+                // Inside the node
+                painter.text(
+                    screen_pos,
+                    egui::Align2::CENTER_CENTER,
+                    &node.label,
+                    font,
+                    Color32::WHITE,
+                );
+            } else {
+                // Below the node
+                let label_pos = Pos2::new(screen_pos.x, screen_pos.y + r + 6.0);
+                painter.text(
+                    label_pos,
+                    egui::Align2::CENTER_TOP,
+                    &node.label,
+                    font,
+                    theme.text_primary,
+                );
+            }
 
             // Click detection
             let node_rect = Rect::from_center_size(screen_pos, Vec2::splat(r * 2.0));
@@ -276,32 +360,163 @@ pub fn render(
             state.selected_node_id = Some(layout.nodes[idx].node_id.clone());
         }
 
-        // Node info panel (when a node is selected)
+        // === Legend overlay (bottom-left) ===
+        render_legend(&painter, rect, theme);
+
+        // === Node info panel (bottom-right, when selected) ===
         if let Some(selected_id) = &state.selected_node_id {
             if let Some(info) = snap
                 .graph_nodes
                 .iter()
                 .find(|n| n.id == *selected_id)
             {
-                // Draw info box in bottom-left of the graph area
-                let info_rect = Rect::from_min_size(
-                    Pos2::new(rect.min.x + 8.0, rect.max.y - 80.0),
-                    Vec2::new(250.0, 70.0),
-                );
-                painter.rect_filled(info_rect, 4.0, Color32::from_rgba_premultiplied(0xFF, 0xFF, 0xFF, 230));
-                painter.rect_stroke(info_rect, 4.0, Stroke::new(1.0, theme.border), egui::StrokeKind::Outside);
-
-                let text_pos = Pos2::new(info_rect.min.x + 8.0, info_rect.min.y + 8.0);
-                painter.text(
-                    text_pos,
-                    egui::Align2::LEFT_TOP,
-                    format!("{} ({})", info.label, info.node_type),
-                    egui::FontId::proportional(13.0),
-                    theme.text_primary,
-                );
+                render_info_panel(&painter, rect, info, snap, theme);
             }
         }
     });
+}
+
+/// Evaluate a quadratic bezier at parameter t.
+fn quadratic_bezier(p0: Pos2, p1: Pos2, p2: Pos2, t: f32) -> Pos2 {
+    let inv = 1.0 - t;
+    Pos2::new(
+        inv * inv * p0.x + 2.0 * inv * t * p1.x + t * t * p2.x,
+        inv * inv * p0.y + 2.0 * inv * t * p1.y + t * t * p2.y,
+    )
+}
+
+/// Renders the graph legend in the bottom-left corner.
+fn render_legend(painter: &egui::Painter, rect: Rect, theme: &LairesTheme) {
+    let legend_w = 180.0;
+    let legend_h = 80.0;
+    let margin = 12.0;
+    let legend_rect = Rect::from_min_size(
+        Pos2::new(rect.min.x + margin, rect.max.y - legend_h - margin),
+        Vec2::new(legend_w, legend_h),
+    );
+
+    // Semi-transparent background
+    painter.rect_filled(
+        legend_rect,
+        CornerRadius::same(8),
+        Color32::from_rgba_premultiplied(0xFF, 0xFF, 0xFF, 220),
+    );
+    painter.rect_stroke(
+        legend_rect,
+        CornerRadius::same(8),
+        Stroke::new(1.0, theme.border),
+        egui::StrokeKind::Outside,
+    );
+
+    // Title
+    painter.text(
+        Pos2::new(legend_rect.min.x + 10.0, legend_rect.min.y + 10.0),
+        egui::Align2::LEFT_TOP,
+        "Graph Legend",
+        egui::FontId::proportional(10.0),
+        theme.text_secondary,
+    );
+
+    // Legend items — 2 columns
+    let items = [
+        ("Character", theme.character_color),
+        ("Objective", theme.objective_color),
+        ("Scene", theme.scene_color),
+        ("Conflict", theme.conflict_color),
+    ];
+
+    let col_w = legend_w / 2.0;
+    let start_y = legend_rect.min.y + 28.0;
+    let row_h = 20.0;
+
+    for (i, (label, color)) in items.iter().enumerate() {
+        let col = i % 2;
+        let row = i / 2;
+        let x = legend_rect.min.x + 10.0 + col as f32 * col_w;
+        let y = start_y + row as f32 * row_h;
+
+        // Dot
+        painter.circle_filled(Pos2::new(x + 5.0, y + 5.0), 4.0, *color);
+
+        // Label
+        painter.text(
+            Pos2::new(x + 14.0, y + 5.0),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::FontId::proportional(10.0),
+            theme.text_primary,
+        );
+    }
+}
+
+/// Renders the node info panel in the bottom-right corner.
+fn render_info_panel(
+    painter: &egui::Painter,
+    rect: Rect,
+    info: &GraphNodeInfo,
+    snap: &ProjectSnapshot,
+    theme: &LairesTheme,
+) {
+    let panel_w = 260.0;
+    let panel_h = 90.0;
+    let margin = 12.0;
+    let panel_rect = Rect::from_min_size(
+        Pos2::new(
+            rect.max.x - panel_w - margin,
+            rect.max.y - panel_h - margin,
+        ),
+        Vec2::new(panel_w, panel_h),
+    );
+
+    // Background
+    painter.rect_filled(
+        panel_rect,
+        CornerRadius::same(10),
+        Color32::from_rgba_premultiplied(0xFF, 0xFF, 0xFF, 240),
+    );
+    painter.rect_stroke(
+        panel_rect,
+        CornerRadius::same(10),
+        Stroke::new(1.0, theme.border),
+        egui::StrokeKind::Outside,
+    );
+
+    let color = node_color(&info.node_type, theme);
+    let x = panel_rect.min.x + 12.0;
+
+    // Colored type badge
+    let badge_y = panel_rect.min.y + 14.0;
+    painter.circle_filled(Pos2::new(x + 5.0, badge_y), 5.0, color);
+    painter.text(
+        Pos2::new(x + 16.0, badge_y),
+        egui::Align2::LEFT_CENTER,
+        info.node_type.to_uppercase(),
+        egui::FontId::proportional(9.0),
+        color,
+    );
+
+    // Name
+    painter.text(
+        Pos2::new(x, panel_rect.min.y + 34.0),
+        egui::Align2::LEFT_TOP,
+        &info.label,
+        egui::FontId::proportional(15.0),
+        theme.text_primary,
+    );
+
+    // Connection count
+    let connections = snap
+        .graph_edges
+        .iter()
+        .filter(|e| e.source == info.id || e.target == info.id)
+        .count();
+    painter.text(
+        Pos2::new(x, panel_rect.min.y + 58.0),
+        egui::Align2::LEFT_TOP,
+        format!("{} connections", connections),
+        egui::FontId::proportional(11.0),
+        theme.text_secondary,
+    );
 }
 
 fn node_color(node_type: &str, theme: &LairesTheme) -> Color32 {

@@ -1,4 +1,9 @@
 use eframe::egui::{self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, Stroke, Style, Visuals};
+use eframe::epaint::Shadow;
+
+/// The "prose" font family name — used for story text in the canvas.
+/// All other UI text uses the default Proportional family (Inter).
+pub const PROSE_FONT: &str = "prose";
 
 pub struct LairesTheme {
     // Backgrounds
@@ -31,6 +36,8 @@ pub struct LairesTheme {
 
     // Accents
     pub accent: Color32,
+    pub accent_light: Color32,
+    pub accent_hover: Color32,
     pub accent_secondary: Color32,
     pub border: Color32,
     pub separator: Color32,
@@ -69,6 +76,8 @@ impl Default for LairesTheme {
 
             // Accents
             accent: Color32::from_rgb(0x36, 0x4F, 0xC7),
+            accent_light: Color32::from_rgb(0xED, 0xF2, 0xFF),
+            accent_hover: Color32::from_rgb(0xF0, 0xF4, 0xFF),
             accent_secondary: Color32::from_rgb(0x70, 0x48, 0xE8),
             border: Color32::from_rgb(0xDE, 0xE2, 0xE6),
             separator: Color32::from_rgb(0xDE, 0xE2, 0xE6),
@@ -89,37 +98,83 @@ impl LairesTheme {
 
         visuals.widgets.noninteractive.bg_fill = self.bg_secondary;
         visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, self.text_primary);
-        visuals.widgets.noninteractive.corner_radius = CornerRadius::same(4);
+        visuals.widgets.noninteractive.corner_radius = CornerRadius::same(8);
 
         visuals.widgets.inactive.bg_fill = self.bg_input;
         visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, self.text_primary);
+        visuals.widgets.inactive.corner_radius = CornerRadius::same(8);
 
-        visuals.widgets.hovered.bg_fill =
-            Color32::from_rgba_premultiplied(0x36, 0x4F, 0xC7, 25);
+        visuals.widgets.hovered.bg_fill = self.accent_hover;
         visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, self.accent);
+        visuals.widgets.hovered.corner_radius = CornerRadius::same(8);
 
         visuals.widgets.active.bg_fill = self.accent;
         visuals.widgets.active.fg_stroke = Stroke::new(1.0, Color32::WHITE);
+        visuals.widgets.active.corner_radius = CornerRadius::same(8);
 
         visuals.selection.bg_fill = Color32::from_rgba_premultiplied(0x36, 0x4F, 0xC7, 40);
         visuals.selection.stroke = Stroke::new(1.0, self.accent);
 
-        visuals.window_corner_radius = CornerRadius::same(8);
+        visuals.window_corner_radius = CornerRadius::same(12);
 
         let mut style = Style::default();
         style.visuals = visuals;
 
-        // Tighter spacing for a polished feel
-        style.spacing.item_spacing = egui::vec2(8.0, 4.0);
-        style.spacing.window_margin = egui::Margin::same(12);
+        // More breathable spacing
+        style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+        style.spacing.window_margin = egui::Margin::same(16);
+        style.spacing.button_padding = egui::vec2(12.0, 6.0);
 
         ctx.set_style(style);
+    }
+
+    /// A card frame with shadow, rounded corners, and generous padding.
+    /// Use for wrapping content sections (chat, canvas, dashboard cards, etc.).
+    pub fn card_frame(&self) -> egui::Frame {
+        egui::Frame {
+            inner_margin: egui::Margin::same(16),
+            fill: Color32::WHITE,
+            stroke: Stroke::new(1.0, self.border),
+            corner_radius: CornerRadius::same(12),
+            outer_margin: egui::Margin::same(4),
+            shadow: Shadow {
+                offset: [0, 2],
+                blur: 8,
+                spread: 0,
+                color: Color32::from_black_alpha(15),
+            },
+        }
+    }
+
+    /// A smaller card for metric displays and compact info blocks.
+    pub fn metric_card_frame(&self) -> egui::Frame {
+        egui::Frame {
+            inner_margin: egui::Margin::same(12),
+            fill: Color32::WHITE,
+            stroke: Stroke::new(1.0, self.border),
+            corner_radius: CornerRadius::same(10),
+            outer_margin: egui::Margin::same(4),
+            shadow: Shadow {
+                offset: [0, 1],
+                blur: 4,
+                spread: 0,
+                color: Color32::from_black_alpha(10),
+            },
+        }
     }
 
     pub fn configure_fonts(ctx: &egui::Context) {
         let mut fonts = FontDefinitions::default();
 
-        // Embed Source Serif 4 for proportional (prose) text
+        // Embed Inter for UI text (default proportional)
+        fonts.font_data.insert(
+            "inter".to_owned(),
+            std::sync::Arc::new(FontData::from_static(include_bytes!(
+                "../../assets/fonts/Inter-Regular.ttf"
+            ))),
+        );
+
+        // Embed Source Serif 4 for prose text
         fonts.font_data.insert(
             "source_serif".to_owned(),
             std::sync::Arc::new(FontData::from_static(include_bytes!(
@@ -135,14 +190,21 @@ impl LairesTheme {
             ))),
         );
 
-        // Set Source Serif as primary proportional font (fallback to default)
+        // Default proportional → Inter (for all UI chrome)
         fonts
             .families
             .entry(FontFamily::Proportional)
             .or_default()
-            .insert(0, "source_serif".to_owned());
+            .insert(0, "inter".to_owned());
 
-        // Set JetBrains Mono as primary monospace font (fallback to default)
+        // Named "prose" family → Source Serif 4 (for story text in canvas)
+        fonts
+            .families
+            .entry(FontFamily::Name(PROSE_FONT.into()))
+            .or_default()
+            .push("source_serif".to_owned());
+
+        // Monospace → JetBrains Mono (for code/tool output)
         fonts
             .families
             .entry(FontFamily::Monospace)

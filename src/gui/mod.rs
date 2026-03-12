@@ -309,7 +309,7 @@ impl GuiApp {
                 egui::Modifiers::NONE,
                 egui::Key::Escape,
             )) {
-                self.gui_state.active_right_tab = RightTab::Canvas;
+                self.gui_state.active_right_tab = RightTab::Dashboard;
             }
             // Cmd/Ctrl+, → Settings
             if input.consume_shortcut(&egui::KeyboardShortcut::new(
@@ -788,13 +788,27 @@ impl GuiApp {
 
     /// Render the project screen (AppMode::Project) — the existing 3-pane layout.
     fn render_project_screen(&mut self, ctx: &egui::Context) {
-        // Status bar (bottom)
+        // Top navigation bar
         panels::status_bar::render(ctx, &self.gui_state, &self.theme);
+
+        // Check if scan was requested via top bar button
+        let top_bar_scan = ctx.memory_mut(|mem| {
+            mem.data
+                .get_temp::<bool>(egui::Id::new("scan_requested"))
+                .unwrap_or(false)
+        });
+        if top_bar_scan {
+            ctx.memory_mut(|mem| {
+                mem.data
+                    .insert_temp(egui::Id::new("scan_requested"), false);
+            });
+            self.gui_state.scan_requested = true;
+        }
 
         // Sidebar (left, collapsible)
         panels::sidebar::render(ctx, &mut self.gui_state, &self.snapshot, &self.theme);
 
-        // Check if scan was requested via sidebar button
+        // Check if scan was requested via sidebar button or top bar
         if self.gui_state.scan_requested {
             self.gui_state.scan_requested = false;
             if let Some(tx) = &self.gui_tx {
@@ -843,6 +857,11 @@ impl GuiApp {
                 ui.horizontal(|ui| {
                     ui.selectable_value(
                         &mut self.gui_state.active_right_tab,
+                        RightTab::Dashboard,
+                        "Dashboard",
+                    );
+                    ui.selectable_value(
+                        &mut self.gui_state.active_right_tab,
                         RightTab::Canvas,
                         "Canvas",
                     );
@@ -865,8 +884,58 @@ impl GuiApp {
                 ui.separator();
 
                 match self.gui_state.active_right_tab {
+                    RightTab::Dashboard => {
+                        panels::dashboard::render(
+                            ui,
+                            &mut self.gui_state,
+                            &self.snapshot,
+                            &self.theme,
+                        );
+                    }
                     RightTab::Canvas => {
-                        panels::canvas::render(ui, &self.snapshot, &self.theme);
+                        if self.gui_state.analysis_sidebar_visible {
+                            // Split: canvas on left, analysis sidebar on right
+                            let sidebar_w = panels::analysis_sidebar::SIDEBAR_WIDTH;
+                            let canvas_w = (ui.available_width() - sidebar_w - 12.0).max(200.0);
+
+                            ui.horizontal(|ui| {
+                                ui.allocate_ui(
+                                    egui::vec2(canvas_w, ui.available_height()),
+                                    |ui| {
+                                        panels::canvas::render(
+                                            ui,
+                                            &self.gui_state,
+                                            &self.snapshot,
+                                            &self.theme,
+                                        );
+                                    },
+                                );
+
+                                ui.add_space(4.0);
+
+                                // Analysis sidebar in a card frame
+                                ui.allocate_ui(
+                                    egui::vec2(sidebar_w, ui.available_height()),
+                                    |ui| {
+                                        self.theme.card_frame().show(ui, |ui| {
+                                            panels::analysis_sidebar::render(
+                                                ui,
+                                                &mut self.gui_state,
+                                                &self.snapshot,
+                                                &self.theme,
+                                            );
+                                        });
+                                    },
+                                );
+                            });
+                        } else {
+                            panels::canvas::render(
+                                ui,
+                                &self.gui_state,
+                                &self.snapshot,
+                                &self.theme,
+                            );
+                        }
                     }
                     RightTab::Graph => {
                         panels::graph_view::render(

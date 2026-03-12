@@ -80,6 +80,12 @@ pub struct GuiState {
     // Canvas
     pub selected_scene_id: Option<String>,
 
+    // Analysis sidebar — entity highlight toggles
+    pub highlight_characters: bool,
+    pub highlight_locations: bool,
+    pub highlight_objects: bool,
+    pub analysis_sidebar_visible: bool,
+
     // Sidebar
     pub sidebar_tab: SidebarTab,
 
@@ -99,6 +105,7 @@ pub struct GuiState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RightTab {
+    Dashboard,
     Canvas,
     Graph,
     Lint,
@@ -146,7 +153,7 @@ impl Default for GuiState {
         Self {
             app_mode: AppMode::Welcome,
             project_title: String::new(),
-            active_right_tab: RightTab::Canvas,
+            active_right_tab: RightTab::Dashboard,
             sidebar_visible: true,
             chat_history: vec![ChatMessage {
                 role: ChatRole::System,
@@ -158,6 +165,10 @@ impl Default for GuiState {
             selected_node_id: None,
             graph_needs_rebuild: true,
             selected_scene_id: None,
+            highlight_characters: true,
+            highlight_locations: true,
+            highlight_objects: false,
+            analysis_sidebar_visible: true,
             sidebar_tab: SidebarTab::Scenes,
             scan_requested: false,
             privacy_label: String::new(),
