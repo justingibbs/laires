@@ -49,6 +49,8 @@ pub enum GuiRequest {
     Scan,
     UpdateProvider(ProjectConfig),
     TestConnection,
+    NewSession,
+    CompactContext,
 }
 
 /// Which screen the GUI is displaying.
@@ -79,6 +81,7 @@ pub struct GuiState {
 
     // Canvas
     pub selected_scene_id: Option<String>,
+    pub selected_file: Option<String>,
 
     // Analysis sidebar — entity highlight toggles
     pub highlight_characters: bool,
@@ -101,6 +104,14 @@ pub struct GuiState {
 
     // Token usage from last LLM request
     pub last_usage: Option<String>,
+
+    // Context window tracking
+    pub context_window_percent: f32,
+    pub context_window_max: u64,
+
+    // Session management
+    pub new_session_requested: bool,
+    pub compact_context_requested: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,6 +176,7 @@ impl Default for GuiState {
             selected_node_id: None,
             graph_needs_rebuild: true,
             selected_scene_id: None,
+            selected_file: None,
             highlight_characters: true,
             highlight_locations: true,
             highlight_objects: false,
@@ -177,6 +189,34 @@ impl Default for GuiState {
             char_count: 0,
             word_count: 0,
             last_usage: None,
+            context_window_percent: 0.0,
+            context_window_max: 128_000,
+            new_session_requested: false,
+            compact_context_requested: false,
         }
+    }
+}
+
+/// Estimate the context window size (in tokens) for known model families.
+pub fn context_window_for_model(model: &str) -> u64 {
+    let m = model.to_lowercase();
+    if m.contains("gemini-2") {
+        1_048_576
+    } else if m.contains("gemini-1.5-pro") {
+        2_097_152
+    } else if m.contains("gemini-1.5") {
+        1_048_576
+    } else if m.contains("claude") {
+        200_000
+    } else if m.contains("gpt-4o") || m.contains("gpt-4-turbo") || m.contains("o1") || m.contains("o3") {
+        128_000
+    } else if m.contains("gpt-3.5") {
+        16_385
+    } else if m.contains("llama") {
+        128_000
+    } else if m.contains("mistral") {
+        32_768
+    } else {
+        128_000
     }
 }

@@ -1,4 +1,4 @@
-use eframe::egui::{self, FontFamily, FontId, RichText, Vec2};
+use eframe::egui::{self, Color32, CornerRadius, FontFamily, FontId, RichText, Vec2};
 
 use crate::gui::state::GuiState;
 use crate::gui::theme::{LairesTheme, PROSE_FONT};
@@ -11,7 +11,7 @@ fn prose_font(size: f32) -> FontId {
 
 pub fn render(
     ui: &mut egui::Ui,
-    state: &GuiState,
+    state: &mut GuiState,
     snapshot: &Option<ProjectSnapshot>,
     theme: &LairesTheme,
 ) {
@@ -39,12 +39,40 @@ pub fn render(
         return;
     }
 
+    // Auto-select first file if none selected and we have per-file data
+    if state.selected_file.is_none() && !snap.file_texts.is_empty() {
+        // Use the first story file from the ordered list
+        if let Some(first) = snap.story_files.first() {
+            state.selected_file = Some(first.clone());
+        }
+    }
+
+    // Resolve which text/boundaries to display
+    let (display_text, display_boundaries, display_word_count) =
+        if let Some(ref file_key) = state.selected_file {
+            if let Some(ftd) = snap.file_texts.get(file_key) {
+                (&ftd.text, &ftd.boundary_lines, ftd.word_count)
+            } else {
+                // Selected file not found in snapshot — fall back to combined
+                (&snap.story_text, &snap.scene_boundary_lines, state.word_count)
+            }
+        } else {
+            // No file selection (single-file project) — use combined text
+            (&snap.story_text, &snap.scene_boundary_lines, state.word_count)
+        };
+
     // Wrap entire canvas in a card frame
     theme.card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
 
+        // === File tabs (only when multiple files) ===
+        if snap.file_texts.len() > 1 {
+            render_file_tabs(ui, state, snap, theme);
+            ui.add_space(4.0);
+        }
+
         // === Breadcrumb header ===
-        render_breadcrumb(ui, state, snap, theme);
+        render_breadcrumb(ui, state, snap, theme, display_word_count);
 
         ui.add_space(12.0);
 
@@ -64,21 +92,69 @@ pub fn render(
                     ui.add_space(16.0);
                     ui.vertical(|ui| {
                         ui.set_max_width((ui.available_width() - 16.0).max(0.0));
-                        render_prose(ui, snap, theme);
+                        render_prose(ui, display_text, display_boundaries, theme);
                     });
                 });
             });
     });
 }
 
-/// Renders the breadcrumb with project name, selected scene, and reading stats.
+/// Renders clickable file tabs when multiple story files exist.
+fn render_file_tabs(
+    ui: &mut egui::Ui,
+    state: &mut GuiState,
+    snap: &ProjectSnapshot,
+    theme: &LairesTheme,
+) {
+    ui.horizontal(|ui| {
+        for file_path in &snap.story_files {
+            if !snap.file_texts.contains_key(file_path) {
+                continue;
+            }
+            let is_active = state.selected_file.as_deref() == Some(file_path);
+
+            // Extract just the filename for display
+            let display_name = std::path::Path::new(file_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(file_path);
+
+            let text = RichText::new(display_name).size(12.0).color(if is_active {
+                theme.accent
+            } else {
+                theme.text_secondary
+            });
+
+            let btn = egui::Button::new(text)
+                .fill(if is_active {
+                    Color32::from_rgba_premultiplied(0x36, 0x4F, 0xC7, 20)
+                } else {
+                    Color32::TRANSPARENT
+                })
+                .stroke(if is_active {
+                    egui::Stroke::new(1.0, theme.accent)
+                } else {
+                    egui::Stroke::NONE
+                })
+                .corner_radius(CornerRadius::same(4));
+
+            if ui.add(btn).clicked() {
+                state.selected_file = Some(file_path.clone());
+                state.selected_scene_id = None;
+            }
+        }
+    });
+}
+
+/// Renders the breadcrumb with project name, file name, selected scene, and reading stats.
 fn render_breadcrumb(
     ui: &mut egui::Ui,
     state: &GuiState,
     snap: &ProjectSnapshot,
     theme: &LairesTheme,
+    word_count: usize,
 ) {
-    // Top line: PROJECT > SCENE
+    // Top line: PROJECT > FILE > SCENE
     ui.horizontal(|ui| {
         // Project name
         let project_name = if state.project_title.is_empty() {
@@ -92,6 +168,25 @@ fn render_breadcrumb(
                 .size(11.0)
                 .strong(),
         );
+
+        // Show file name if selected
+        if let Some(ref file_path) = state.selected_file {
+            let display_name = std::path::Path::new(file_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(file_path);
+            ui.label(
+                RichText::new("\u{203A}")
+                    .color(theme.text_secondary)
+                    .size(11.0),
+            );
+            ui.label(
+                RichText::new(display_name.to_uppercase())
+                    .color(theme.text_secondary)
+                    .size(11.0)
+                    .strong(),
+            );
+        }
 
         // If a scene is selected, show it
         if let Some(scene_id) = &state.selected_scene_id {
@@ -117,7 +212,7 @@ fn render_breadcrumb(
         }
     });
 
-    // Scene title (large) — show selected scene or first scene
+    // Scene title (large) — show selected scene or first scene in active file
     let display_title = selected_scene_title(state, snap)
         .unwrap_or_else(|| "Untitled".to_string());
     ui.label(
@@ -127,8 +222,7 @@ fn render_breadcrumb(
             .strong(),
     );
 
-    // Reading metadata
-    let word_count = state.word_count;
+    // Reading metadata — scoped to active file
     let reading_mins = (word_count as f32 / 250.0).ceil() as usize;
     let reading_time = if reading_mins <= 1 {
         "< 1 minute".to_string()
@@ -147,13 +241,18 @@ fn render_breadcrumb(
 }
 
 /// Renders the prose text with scene boundary dividers instead of colored text.
-fn render_prose(ui: &mut egui::Ui, snap: &ProjectSnapshot, theme: &LairesTheme) {
+fn render_prose(
+    ui: &mut egui::Ui,
+    text: &str,
+    boundary_lines: &std::collections::HashSet<usize>,
+    theme: &LairesTheme,
+) {
     // Increase line spacing for readability
     let prev_spacing = ui.spacing().item_spacing.y;
     ui.spacing_mut().item_spacing.y = 4.0;
 
-    for (line_idx, line) in snap.story_text.lines().enumerate() {
-        let is_boundary = snap.scene_boundary_lines.contains(&line_idx);
+    for (line_idx, line) in text.lines().enumerate() {
+        let is_boundary = boundary_lines.contains(&line_idx);
 
         if is_boundary {
             // Scene boundary: subtle horizontal rule + scene header
@@ -192,18 +291,30 @@ fn render_prose(ui: &mut egui::Ui, snap: &ProjectSnapshot, theme: &LairesTheme) 
     ui.spacing_mut().item_spacing.y = prev_spacing;
 }
 
-/// Find the title of the currently selected scene (or first scene if none selected).
+/// Find the title of the currently selected scene (or first scene in active file if none selected).
 fn selected_scene_title(state: &GuiState, snap: &ProjectSnapshot) -> Option<String> {
     let target_id = state.selected_scene_id.as_deref();
-    for group in &snap.all_scenes {
+
+    // When a file is selected, only look at scenes from that file
+    let groups: Vec<&crate::gui::FileSceneGroup> = if let Some(ref file_path) = state.selected_file
+    {
+        snap.all_scenes
+            .iter()
+            .filter(|g| g.file_path == *file_path)
+            .collect()
+    } else {
+        snap.all_scenes.iter().collect()
+    };
+
+    for group in groups {
         for (id, title) in &group.scenes {
             if let Some(tid) = target_id {
                 if id == tid {
-                    return title.clone().or_else(|| Some(format!("Scene")));
+                    return title.clone().or_else(|| Some("Scene".to_string()));
                 }
             } else {
                 // No selection — return first scene title
-                return title.clone().or_else(|| Some(format!("Scene 1")));
+                return title.clone().or_else(|| Some("Scene 1".to_string()));
             }
         }
     }

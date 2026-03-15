@@ -99,11 +99,20 @@ pub(crate) struct FileSceneGroup {
     pub scenes: Vec<(String, Option<String>)>, // (scene_id, title)
 }
 
+/// Per-file text data for file-aware canvas rendering.
+pub(crate) struct FileTextData {
+    pub text: String,
+    pub boundary_lines: std::collections::HashSet<usize>,
+    pub word_count: usize,
+}
+
 /// Cached read-only snapshot of project data for rendering without locking.
 pub(crate) struct ProjectSnapshot {
     story_text: String,
     all_scenes: Vec<FileSceneGroup>,
     scene_boundary_lines: std::collections::HashSet<usize>,
+    /// Per-file text and boundary data, keyed by file path.
+    file_texts: std::collections::HashMap<String, FileTextData>,
     story_files: Vec<String>,
     context_files: Vec<String>,
     graph_nodes: Vec<panels::graph_view::GraphNodeInfo>,
@@ -236,6 +245,15 @@ impl GuiApp {
                         context_estimate
                     };
                     self.gui_state.last_usage = Some(usage_str);
+
+                    // Update context window percentage
+                    if prompt_tokens > 0 {
+                        let max = self.gui_state.context_window_max;
+                        if max > 0 {
+                            self.gui_state.context_window_percent =
+                                (prompt_tokens as f32 / max as f32 * 100.0).min(100.0);
+                        }
+                    }
                 }
                 AgentEvent::ConnectionTestResult(success, message) => {
                     if let Some(dialog) = &mut self.settings_dialog {
@@ -662,6 +680,7 @@ impl GuiApp {
                 }
 
                 // Reset GUI state for the new project
+                let ctx_window_max = state::context_window_for_model(&model_name);
                 self.gui_state = GuiState {
                     app_mode: AppMode::Project,
                     project_title: title.clone(),
@@ -672,12 +691,10 @@ impl GuiApp {
                     word_count,
                     chat_history: vec![ChatMessage {
                         role: ChatRole::System,
-                        content: format!(
-                            "{} | {} scenes | {} characters | {} words",
-                            title, scene_count, char_count, word_count
-                        ),
+                        content: "Welcome to Laires. Ask me anything about your story.".to_string(),
                         tool_calls: Vec::new(),
                     }],
+                    context_window_max: ctx_window_max,
                     ..GuiState::default()
                 };
                 self.graph_layout = panels::graph_view::GraphLayoutState::default();
@@ -822,17 +839,17 @@ impl GuiApp {
             self.gui_state.agent_status = AgentStatus::Thinking;
         }
 
-        // Chat pane (SidePanel — fills full window height)
+        // Chat pane (bottom panel — below content, right of sidebar)
         let mut should_send = false;
-        egui::SidePanel::left("chat_pane")
-            .default_width(500.0)
-            .min_width(300.0)
-            .max_width(800.0)
+        egui::TopBottomPanel::bottom("chat_pane")
+            .default_height(280.0)
+            .min_height(150.0)
+            .max_height(600.0)
             .resizable(true)
             .frame(
                 egui::Frame::NONE
                     .fill(self.theme.bg_primary)
-                    .inner_margin(egui::Margin::same(12))
+                    .inner_margin(egui::Margin::symmetric(16, 8))
                     .stroke(egui::Stroke {
                         width: 1.0,
                         color: self.theme.border,
@@ -845,7 +862,33 @@ impl GuiApp {
             self.send_chat();
         }
 
-        // Right pane (CentralPanel — fills remaining space)
+        // Handle session management requests from chat panel
+        if self.gui_state.new_session_requested {
+            self.gui_state.new_session_requested = false;
+            if let Some(tx) = &self.gui_tx {
+                let _ = tx.send(GuiRequest::NewSession);
+            }
+            self.gui_state.chat_history = vec![ChatMessage {
+                role: ChatRole::System,
+                content: "New session started.".to_string(),
+                tool_calls: Vec::new(),
+            }];
+            self.gui_state.context_window_percent = 0.0;
+            self.gui_state.agent_status = AgentStatus::Idle;
+        }
+        if self.gui_state.compact_context_requested {
+            self.gui_state.compact_context_requested = false;
+            if let Some(tx) = &self.gui_tx {
+                let _ = tx.send(GuiRequest::CompactContext);
+            }
+            self.gui_state.chat_history.push(ChatMessage {
+                role: ChatRole::System,
+                content: "Compacting conversation context...".to_string(),
+                tool_calls: Vec::new(),
+            });
+        }
+
+        // Content area (CentralPanel — fills remaining space above chat)
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::NONE
@@ -899,12 +942,13 @@ impl GuiApp {
                             let canvas_w = (ui.available_width() - sidebar_w - 12.0).max(200.0);
 
                             ui.horizontal(|ui| {
-                                ui.allocate_ui(
+                                ui.allocate_ui_with_layout(
                                     egui::vec2(canvas_w, ui.available_height()),
+                                    egui::Layout::top_down(egui::Align::LEFT),
                                     |ui| {
                                         panels::canvas::render(
                                             ui,
-                                            &self.gui_state,
+                                            &mut self.gui_state,
                                             &self.snapshot,
                                             &self.theme,
                                         );
@@ -914,8 +958,9 @@ impl GuiApp {
                                 ui.add_space(4.0);
 
                                 // Analysis sidebar in a card frame
-                                ui.allocate_ui(
+                                ui.allocate_ui_with_layout(
                                     egui::vec2(sidebar_w, ui.available_height()),
+                                    egui::Layout::top_down(egui::Align::LEFT),
                                     |ui| {
                                         self.theme.card_frame().show(ui, |ui| {
                                             panels::analysis_sidebar::render(
@@ -931,7 +976,7 @@ impl GuiApp {
                         } else {
                             panels::canvas::render(
                                 ui,
-                                &self.gui_state,
+                                &mut self.gui_state,
                                 &self.snapshot,
                                 &self.theme,
                             );
@@ -1055,6 +1100,34 @@ fn build_snapshot(proj: &ProjectData) -> ProjectSnapshot {
         byte_offset += line.len() + 1;
     }
 
+    // Build per-file text data for file-aware canvas
+    let mut file_texts = std::collections::HashMap::new();
+    if let Some(ref fbm) = proj.file_buffer_manager {
+        for entry in fbm.entries() {
+            let text = entry.text_buffer.read_all();
+            let file_scenes = entry.scene_map.list_scenes();
+            let mut file_boundaries = std::collections::HashSet::new();
+            let mut bo = 0;
+            for (line_idx, line) in text.lines().enumerate() {
+                for scene in file_scenes {
+                    if bo >= scene.start && bo <= scene.start + line.len() {
+                        file_boundaries.insert(line_idx);
+                    }
+                }
+                bo += line.len() + 1;
+            }
+            let wc = entry.text_buffer.word_count();
+            file_texts.insert(
+                entry.file_path.clone(),
+                FileTextData {
+                    text,
+                    boundary_lines: file_boundaries,
+                    word_count: wc,
+                },
+            );
+        }
+    }
+
     let story_files = proj
         .manifest
         .as_ref()
@@ -1137,6 +1210,7 @@ fn build_snapshot(proj: &ProjectData) -> ProjectSnapshot {
         story_text,
         all_scenes,
         scene_boundary_lines: boundary_lines,
+        file_texts,
         story_files,
         context_files,
         graph_nodes,
@@ -1268,16 +1342,14 @@ pub async fn run_gui(project_path: Option<PathBuf>) -> anyhow::Result<()> {
                 gs.app_mode = AppMode::Project;
                 gs.project_title = title.clone();
                 gs.privacy_label = privacy;
-                gs.model_name = model_name;
+                gs.model_name = model_name.clone();
                 gs.scene_count = scene_count;
                 gs.char_count = char_count;
                 gs.word_count = word_count;
+                gs.context_window_max = state::context_window_for_model(&model_name);
                 gs.chat_history = vec![ChatMessage {
                     role: ChatRole::System,
-                    content: format!(
-                        "{} | {} scenes | {} characters | {} words",
-                        title, scene_count, char_count, word_count
-                    ),
+                    content: "Welcome to Laires. Ask me anything about your story.".to_string(),
                     tool_calls: Vec::new(),
                 }];
 

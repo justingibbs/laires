@@ -1,6 +1,6 @@
 use eframe::egui::{self, Color32, CornerRadius, RichText, Stroke, Vec2};
 
-use crate::gui::state::{GuiState, SidebarTab};
+use crate::gui::state::{GuiState, RightTab, SidebarTab};
 use crate::gui::theme::LairesTheme;
 use crate::gui::ProjectSnapshot;
 
@@ -243,9 +243,14 @@ fn render_scenes(
             let fallback = format!("Scene {}", global_idx);
             let label = title.as_deref().unwrap_or(&fallback);
             let is_selected = state.selected_scene_id.as_deref() == Some(id.as_str());
+            let file_path = group.file_path.clone();
 
             render_scene_row(ui, label, is_selected, theme, || {
                 state.selected_scene_id = Some(id.clone());
+                // Also select the file this scene belongs to
+                if !file_path.is_empty() {
+                    state.selected_file = Some(file_path.clone());
+                }
             });
         }
     }
@@ -349,7 +354,12 @@ fn render_files(
         });
         ui.add_space(2.0);
         for path in &snap.story_files {
-            render_file_row(ui, path, "story", theme);
+            let is_selected = state.selected_file.as_deref() == Some(path.as_str());
+            if render_file_row(ui, path, "story", is_selected, theme) {
+                state.selected_file = Some(path.clone());
+                state.selected_scene_id = None;
+                state.active_right_tab = RightTab::Canvas;
+            }
         }
     }
 
@@ -366,24 +376,49 @@ fn render_files(
         });
         ui.add_space(2.0);
         for path in &snap.context_files {
-            render_file_row(ui, path, "context", theme);
+            render_file_row(ui, path, "context", false, theme);
         }
     }
 }
 
-/// Renders a single file row with icon and classification badge.
+/// Renders a single file row with icon and classification badge. Returns true if clicked.
 fn render_file_row(
     ui: &mut egui::Ui,
     path: &str,
     classification: &str,
+    is_selected: bool,
     theme: &LairesTheme,
-) {
-    let (rect, _response) = ui.allocate_exact_size(
+) -> bool {
+    let (rect, response) = ui.allocate_exact_size(
         Vec2::new(ui.available_width(), ROW_HEIGHT),
         egui::Sense::click(),
     );
 
     let painter = ui.painter();
+
+    // Hover
+    if response.hovered() && !is_selected {
+        painter.rect_filled(
+            rect,
+            CornerRadius::same(0),
+            Color32::from_rgba_premultiplied(0x36, 0x4F, 0xC7, 10),
+        );
+    }
+
+    // Selected background
+    if is_selected {
+        painter.rect_filled(
+            rect,
+            CornerRadius::same(0),
+            Color32::from_rgba_premultiplied(0x36, 0x4F, 0xC7, 18),
+        );
+        // Left accent bar
+        let bar_rect = egui::Rect::from_min_size(
+            rect.left_top(),
+            Vec2::new(ACTIVE_BAR_WIDTH, rect.height()),
+        );
+        painter.rect_filled(bar_rect, CornerRadius::same(0), theme.accent);
+    }
 
     // File icon
     let icon_pos = egui::pos2(rect.min.x + LEFT_PAD, rect.center().y);
@@ -419,4 +454,6 @@ fn render_file_row(
         egui::FontId::proportional(9.0),
         badge_color,
     );
+
+    response.clicked()
 }

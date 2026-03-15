@@ -8,34 +8,35 @@ const BUBBLE_RADIUS: u8 = 12;
 const BUBBLE_RADIUS_TAIL: u8 = 4;
 const INPUT_HEIGHT: f32 = 72.0;
 
+/// Color for the context bar based on fill percentage.
+fn context_bar_color(percent: f32) -> Color32 {
+    if percent >= 85.0 {
+        Color32::from_rgb(0xC9, 0x2A, 0x2A) // red
+    } else if percent >= 60.0 {
+        Color32::from_rgb(0xE6, 0x77, 0x00) // orange
+    } else if percent >= 50.0 {
+        Color32::from_rgb(0xF5, 0x9F, 0x00) // yellow
+    } else {
+        Color32::from_rgb(0x2B, 0x8A, 0x3E) // green
+    }
+}
+
 /// Renders the chat panel. Returns true if the user submitted a message.
 pub fn render(ui: &mut egui::Ui, state: &mut GuiState, theme: &LairesTheme) -> bool {
     let input_reserved = INPUT_HEIGHT + 20.0;
-    let scroll_height = (ui.available_height() - input_reserved).max(100.0);
 
-    // Section header
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new("Chat")
-                .color(theme.text_primary)
-                .size(15.0)
-                .strong(),
-        );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            match &state.agent_status {
-                AgentStatus::Idle => {}
-                AgentStatus::Thinking => {
-                    ui.spinner();
-                }
-                AgentStatus::ToolCall(_) | AgentStatus::Streaming => {
-                    ui.spinner();
-                }
-            }
-        });
-    });
-    ui.add_space(4.0);
+    // === Header row: "Chat" + context bar + session controls + spinner ===
+    render_header(ui, state, theme);
+    ui.add_space(2.0);
+
+    // === Context warning (only when >= 50%) ===
+    if state.context_window_percent >= 50.0 {
+        render_context_warning(ui, state, theme);
+        ui.add_space(2.0);
+    }
 
     // Message history
+    let scroll_height = (ui.available_height() - input_reserved).max(60.0);
     egui::ScrollArea::vertical()
         .id_salt("chat_scroll")
         .max_height(scroll_height)
@@ -63,6 +64,137 @@ pub fn render(ui: &mut egui::Ui, state: &mut GuiState, theme: &LairesTheme) -> b
     // Input area
     ui.add_space(4.0);
     render_input(ui, state, theme)
+}
+
+/// Renders the compact header: Chat label, context bar, New Session button, spinner.
+fn render_header(ui: &mut egui::Ui, state: &mut GuiState, theme: &LairesTheme) {
+    ui.horizontal(|ui| {
+        // "Chat" label
+        ui.label(
+            RichText::new("Chat")
+                .color(theme.text_primary)
+                .size(15.0)
+                .strong(),
+        );
+
+        ui.add_space(8.0);
+
+        // Context window progress bar (compact)
+        let percent = state.context_window_percent;
+        if percent > 0.0 {
+            let bar_width = 100.0;
+            let bar_height = 8.0;
+            let (rect, _) =
+                ui.allocate_exact_size(Vec2::new(bar_width, bar_height), egui::Sense::hover());
+
+            let painter = ui.painter();
+
+            // Background track
+            painter.rect_filled(
+                rect,
+                CornerRadius::same(4),
+                theme.bg_input,
+            );
+
+            // Filled portion
+            let fill_width = (rect.width() * (percent / 100.0)).min(rect.width());
+            let fill_rect = egui::Rect::from_min_size(rect.min, Vec2::new(fill_width, bar_height));
+            painter.rect_filled(
+                fill_rect,
+                CornerRadius::same(4),
+                context_bar_color(percent),
+            );
+
+            ui.add_space(4.0);
+
+            // Percentage label
+            ui.label(
+                RichText::new(format!("{}%", percent as u32))
+                    .color(theme.text_secondary)
+                    .size(11.0),
+            );
+        }
+
+        // Right-aligned controls
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // Spinner when agent is active
+            match &state.agent_status {
+                AgentStatus::Idle => {}
+                AgentStatus::Thinking | AgentStatus::ToolCall(_) | AgentStatus::Streaming => {
+                    ui.spinner();
+                }
+            }
+
+            ui.add_space(4.0);
+
+            // New Session button
+            let btn = egui::Button::new(
+                RichText::new("+ New Session")
+                    .color(theme.accent)
+                    .size(11.0),
+            )
+            .fill(Color32::TRANSPARENT)
+            .stroke(Stroke::new(1.0, theme.accent))
+            .corner_radius(CornerRadius::same(4));
+
+            if ui.add(btn).clicked() {
+                state.new_session_requested = true;
+            }
+        });
+    });
+}
+
+/// Renders the context warning banner with action buttons.
+fn render_context_warning(ui: &mut egui::Ui, state: &mut GuiState, theme: &LairesTheme) {
+    let percent = state.context_window_percent;
+    let warning_bg = if percent >= 85.0 {
+        Color32::from_rgb(0xFD, 0xF0, 0xF0) // red tint
+    } else {
+        Color32::from_rgb(0xFF, 0xF9, 0xDB) // yellow tint
+    };
+
+    egui::Frame::NONE
+        .fill(warning_bg)
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(egui::Margin::symmetric(10, 6))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let icon = if percent >= 85.0 { "!" } else { "i" };
+                let label = if percent >= 85.0 {
+                    "Context nearly full"
+                } else {
+                    "Context over 50%"
+                };
+                ui.label(
+                    RichText::new(format!("{icon} {label}"))
+                        .color(theme.text_primary)
+                        .size(11.0),
+                );
+
+                ui.add_space(8.0);
+
+                // Action buttons
+                if ui
+                    .small_button(RichText::new("New Session").size(10.0))
+                    .clicked()
+                {
+                    state.new_session_requested = true;
+                }
+
+                ui.label(
+                    RichText::new("\u{00B7}")
+                        .color(theme.text_secondary)
+                        .size(10.0),
+                );
+
+                if ui
+                    .small_button(RichText::new("Compact").size(10.0))
+                    .clicked()
+                {
+                    state.compact_context_requested = true;
+                }
+            });
+        });
 }
 
 /// Renders a single chat message with avatar and bubble.

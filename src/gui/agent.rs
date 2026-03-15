@@ -110,6 +110,23 @@ pub async fn agent_loop(
                 let _ = events.send(AgentEvent::ConnectionTestResult(success, message));
                 let _ = events.send(AgentEvent::Idle);
             }
+            GuiRequest::NewSession => {
+                llm_history.clear();
+                let _ = events.send(AgentEvent::Response(
+                    "Session cleared. Ready for a new conversation.".to_string(),
+                ));
+                let _ = events.send(AgentEvent::Idle);
+            }
+            GuiRequest::CompactContext => {
+                let before = llm_history.len();
+                llm_history = summarize_history(&llm_history, 4);
+                let after = llm_history.len();
+                let _ = events.send(AgentEvent::Response(format!(
+                    "Context compacted: {} messages condensed to {}.",
+                    before, after
+                )));
+                let _ = events.send(AgentEvent::Idle);
+            }
             GuiRequest::Chat(input) => {
                 let _ = events.send(AgentEvent::Thinking);
 
