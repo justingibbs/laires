@@ -8,6 +8,7 @@ use crate::concepts::manifest::{
 use crate::concepts::narrative_graph::NarrativeGraph;
 use crate::concepts::provider::{Message, Provider, Role};
 use crate::config::{self, ProjectConfig, LAIRES_DIR};
+use crate::runtime::scene_cache::SceneCache;
 
 pub async fn run(scene_num: Option<usize>, full: bool) -> anyhow::Result<()> {
     let project_dir = std::env::current_dir()?;
@@ -226,13 +227,9 @@ pub async fn run(scene_num: Option<usize>, full: bool) -> anyhow::Result<()> {
         }
     }
 
-    // Persist graph and scene maps
+    // Persist graph and scene cache
     graph.save(&graph_path)?;
-    for entry in fbm.entries() {
-        entry
-            .scene_map
-            .save(&project_root.join(LAIRES_DIR).join("scenes.json"))?;
-    }
+    SceneCache::from_file_buffer_manager(&fbm).save_to_project(&project_root)?;
 
     println!("{}", graph.summary());
 
@@ -309,4 +306,3 @@ fn confirm_classification() -> anyhow::Result<bool> {
 
     Ok(trimmed.is_empty() || trimmed == "y" || trimmed == "yes")
 }
-

@@ -137,14 +137,6 @@ pub fn render(ctx: &egui::Context, state: &GuiState, theme: &LairesTheme) {
                                     .size(11.0),
                             );
                         }
-                        AgentStatus::Streaming => {
-                            ui.spinner();
-                            ui.label(
-                                RichText::new("Streaming...")
-                                    .color(theme.accent)
-                                    .size(11.0),
-                            );
-                        }
                     }
 
                     ui.add_space(12.0);

@@ -1,36 +1,10 @@
-use std::sync::Arc;
-use tokio::sync::Mutex;
-
-use crate::concepts::canvas::Canvas;
-use crate::concepts::character_perspective::CharacterPerspective;
-use crate::concepts::declared_intent::DeclaredIntent;
-use crate::concepts::manifest::Manifest;
-use crate::concepts::narrative_graph::NarrativeGraph;
-use crate::concepts::scene_map::SceneMap;
-use crate::concepts::text_buffer::TextBuffer;
 use crate::config::ProjectConfig;
-
-/// Domain state shared between GUI and agent task.
-pub struct DomainState {
-    pub text_buffer: TextBuffer,
-    pub scene_map: SceneMap,
-    pub graph: NarrativeGraph,
-    pub intent: DeclaredIntent,
-    pub perspectives: CharacterPerspective,
-    pub canvas: Canvas,
-    pub manifest: Option<Manifest>,
-    pub project_root: std::path::PathBuf,
-    pub config: ProjectConfig,
-}
-
-pub type SharedDomain = Arc<Mutex<DomainState>>;
 
 /// Messages from agent -> GUI
 pub enum AgentEvent {
     Thinking,
     ToolCall { name: String, args_summary: String },
     ToolResult { name: String, result_summary: String },
-    StreamChunk(String),
     Response(String),
     Error(String),
     Idle,
@@ -134,7 +108,6 @@ pub enum AgentStatus {
     Idle,
     Thinking,
     ToolCall(String),
-    Streaming,
 }
 
 #[derive(Debug, Clone)]

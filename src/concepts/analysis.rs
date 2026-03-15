@@ -71,6 +71,7 @@ pub struct SceneMetadata {
     pub time: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum AnalysisStatus {
     Idle,
@@ -127,11 +128,13 @@ impl Analysis {
     }
 
     /// Get the number of tasks in the queue
+    #[allow(dead_code)]
     pub fn queue_len(&self) -> usize {
         self.queue.len()
     }
 
     /// Check cache for a previous analysis
+    #[allow(dead_code)]
     pub fn get_cached(
         &self,
         scene_id: &str,
@@ -142,6 +145,7 @@ impl Analysis {
     }
 
     /// Invalidate cached results for a scene
+    #[allow(dead_code)]
     pub fn invalidate(&mut self, scene_id: &str) {
         self.cache
             .retain(|(sid, _), _| sid != scene_id);
@@ -250,6 +254,7 @@ impl Analysis {
         }
     }
 
+    #[allow(dead_code)]
     pub fn status(&self) -> &AnalysisStatus {
         &self.status
     }

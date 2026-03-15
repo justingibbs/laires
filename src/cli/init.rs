@@ -87,11 +87,7 @@ pub fn init_at(project_dir: &Path, title: &str, fountain: bool) -> anyhow::Resul
     let scenes_path = laires_dir.join("scenes.json");
     fs::write(
         &scenes_path,
-        serde_json::to_string_pretty(&serde_json::json!({
-            "scenes": [],
-            "parse_mode": if fountain { "Fountain" } else { "Prose" },
-            "pending_reindex": []
-        }))?,
+        serde_json::to_string_pretty(&crate::runtime::scene_cache::SceneCache::empty())?,
     )?;
 
     println!("Initialized Laires project: {title}");

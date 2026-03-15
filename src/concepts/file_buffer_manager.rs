@@ -1,5 +1,5 @@
 use regex::Regex;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::concepts::manifest::Manifest;
 use crate::concepts::scene_map::{ParseMode, SceneMap, SceneSpan};
@@ -22,7 +22,6 @@ pub struct SearchHit {
 
 pub struct FileBufferManager {
     entries: Vec<FileEntry>,
-    project_root: PathBuf,
 }
 
 impl FileBufferManager {
@@ -61,10 +60,7 @@ impl FileBufferManager {
 
         entries.sort_by_key(|e| e.order);
 
-        Ok(Self {
-            entries,
-            project_root: project_root.to_path_buf(),
-        })
+        Ok(Self { entries })
     }
 
     /// Get a file entry by relative path.
@@ -80,11 +76,6 @@ impl FileBufferManager {
     /// All entries in manifest order.
     pub fn entries(&self) -> &[FileEntry] {
         &self.entries
-    }
-
-    /// All entries mutably.
-    pub fn entries_mut(&mut self) -> &mut [FileEntry] {
-        &mut self.entries
     }
 
     /// List all scenes across all files in manifest order, then by byte offset.
@@ -168,9 +159,14 @@ impl FileBufferManager {
         self.entries.len()
     }
 
-    /// Project root path.
-    pub fn project_root(&self) -> &Path {
-        &self.project_root
+    /// Save any dirty text buffers.
+    pub fn save_dirty(&mut self) -> anyhow::Result<()> {
+        for entry in &mut self.entries {
+            if entry.text_buffer.is_dirty() {
+                entry.text_buffer.save()?;
+            }
+        }
+        Ok(())
     }
 }
 

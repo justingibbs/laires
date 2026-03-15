@@ -19,7 +19,9 @@ pub struct LairesTheme {
 
     // Prose display
     pub prose_color: Color32,
+    #[allow(dead_code)]
     pub scene_boundary_color: Color32,
+    #[allow(dead_code)]
     pub line_number_color: Color32,
 
     // Graph node colors
@@ -29,7 +31,9 @@ pub struct LairesTheme {
     pub conflict_color: Color32,
 
     // Chat roles
+    #[allow(dead_code)]
     pub user_msg_color: Color32,
+    #[allow(dead_code)]
     pub assistant_msg_color: Color32,
     pub tool_msg_color: Color32,
     pub error_msg_color: Color32,
@@ -40,6 +44,7 @@ pub struct LairesTheme {
     pub accent_hover: Color32,
     pub accent_secondary: Color32,
     pub border: Color32,
+    #[allow(dead_code)]
     pub separator: Color32,
 }
 

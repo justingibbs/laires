@@ -9,7 +9,6 @@ pub const OVERRIDES_FILE: &str = "overrides.json";
 pub const PERSPECTIVES_CACHE_DIR: &str = "cache/perspectives";
 pub const CHAT_HISTORY_FILE: &str = "chat_history.json";
 pub const MANIFEST_FILE: &str = "manifest.toml";
-pub const SKILLS_DIR: &str = "skills";
 pub const SKILL_LOG_FILE: &str = "skill_log.jsonl";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -23,15 +23,18 @@ impl ByteRange {
         Self { start, end }
     }
 
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.end - self.start
     }
 
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.start == self.end
     }
 
     /// Check if two ranges overlap
+    #[allow(dead_code)]
     pub fn overlaps(&self, other: &ByteRange) -> bool {
         self.start < other.end && other.start < self.end
     }
@@ -85,6 +88,7 @@ impl TextBuffer {
     }
 
     /// Create a TextBuffer from a string (for testing or in-memory use)
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn from_str(text: &str, file_path: PathBuf) -> Self {
         Self {
             rope: Rope::from_str(text),
@@ -116,6 +120,7 @@ impl TextBuffer {
     }
 
     /// Delete text in a byte range
+    #[allow(dead_code)]
     pub fn delete(&mut self, range: ByteRange) -> Result<()> {
         if range.end > self.rope.len_bytes() {
             return Err(LairesError::InvalidRange {
@@ -188,16 +193,19 @@ impl TextBuffer {
     }
 
     /// Return accumulated changes and reset the log
+    #[allow(dead_code)]
     pub fn checkpoint(&mut self) -> Vec<ChangeEntry> {
         std::mem::take(&mut self.change_log)
     }
 
     /// Get the total byte length of the text
+    #[allow(dead_code)]
     pub fn len_bytes(&self) -> usize {
         self.rope.len_bytes()
     }
 
     /// Check if the buffer is empty
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.rope.len_bytes() == 0
     }

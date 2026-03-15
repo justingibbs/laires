@@ -22,12 +22,16 @@ use crate::concepts::character_perspective::CharacterPerspective;
 use crate::concepts::declared_intent::DeclaredIntent;
 use crate::concepts::manifest::Manifest;
 use crate::concepts::narrative_graph::NarrativeGraph;
-use crate::concepts::provider::{Message, Provider, Role, ToolResult};
-use crate::concepts::scene_map::{ParseMode, SceneMap};
-use crate::concepts::skills::{SkillContext, Skills};
+use crate::concepts::provider::{ToolCall, ToolResult};
+use crate::concepts::scene_map::SceneMap;
+use crate::concepts::skills::{SkillContext, SkillSetContext};
 use crate::concepts::text_buffer::TextBuffer;
-use crate::config::{self, ProjectConfig, LAIRES_DIR, OVERRIDES_FILE, PERSPECTIVES_CACHE_DIR};
-use crate::sync::divergence;
+use crate::config::{self, LAIRES_DIR, OVERRIDES_FILE, PERSPECTIVES_CACHE_DIR};
+use crate::runtime::agent_session::{
+    truncate_json, AgentSession, ChatTurnError, ChatTurnRequest, SessionEvent,
+};
+use crate::runtime::project_loader::load_project;
+use crate::runtime::story_access::StoryAccess;
 
 const SYSTEM_PROMPT: &str = r#"You are Laires, an intelligent narrative analysis agent for fiction writers. You have deep understanding of story structure, character arcs, objectives, conflicts, and pacing.
 
@@ -43,7 +47,9 @@ When answering questions:
 
 You can use tools to search the story, read scenes, query the graph, analyze character arcs, run perspective analysis, detect blind spots, lint for consistency issues, check pacing, and write/replace text in the canvas."#;
 
-const MAX_TOOL_TURNS: usize = 10;
+struct TuiToolRuntime {
+    app: Arc<Mutex<App>>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Pane {
@@ -88,6 +94,7 @@ struct App {
     perspectives: CharacterPerspective,
     canvas: Canvas,
     manifest: Option<Manifest>,
+    file_buffer_manager: Option<crate::concepts::file_buffer_manager::FileBufferManager>,
     project_root: std::path::PathBuf,
     active_pane: Pane,
     agent_status: AgentStatus,
@@ -97,7 +104,6 @@ struct App {
     privacy: String,
     model_name: String,
     should_quit: bool,
-    llm_history: Vec<Message>,
     overlay_scroll: usize,
     status_expanded: bool,
 }
@@ -107,66 +113,28 @@ pub async fn run_tui() -> anyhow::Result<()> {
     let project_root = config::find_project_root(&project_dir)
         .ok_or_else(|| anyhow::anyhow!("Not in a Laires project. Run `laires init` first."))?;
 
-    let config = ProjectConfig::load(&project_root)?;
-    let story_path = config::story_file_path(&project_root, &config.project.format);
-
-    if !story_path.exists() {
-        anyhow::bail!("Story file not found: {}", story_path.display());
-    }
-
-    let text_buffer = TextBuffer::from_file(story_path)?;
-    let full_text = text_buffer.read_all();
-
-    let parse_mode = match config.project.format.as_str() {
-        "fountain" => ParseMode::Fountain,
-        _ => ParseMode::Prose,
-    };
-    let mut scene_map = SceneMap::new(parse_mode);
-    scene_map.full_reindex(&full_text, "");
-
-    let graph_path = project_root.join(LAIRES_DIR).join("graph.json");
-    let graph = if graph_path.exists() {
-        NarrativeGraph::load(&graph_path).unwrap_or_default()
-    } else {
-        NarrativeGraph::new()
-    };
-
+    let load_result = load_project(&project_root)?;
+    let text_buffer = load_result.project.text_buffer;
+    let scene_map = load_result.project.scene_map;
+    let graph = load_result.project.graph;
+    let intent = load_result.project.intent;
+    let perspectives = load_result.project.perspectives;
+    let manifest = load_result.project.manifest;
+    let file_buffer_manager = load_result.project.file_buffer_manager;
+    let config = load_result.project.config;
+    let mut provider = load_result.provider;
+    let mut skills = load_result.skills;
     let overrides_path = project_root.join(LAIRES_DIR).join(OVERRIDES_FILE);
-    let intent = if overrides_path.exists() {
-        DeclaredIntent::load(&overrides_path).unwrap_or_default()
-    } else {
-        DeclaredIntent::new()
-    };
-
-    let perspectives_dir = project_root.join(LAIRES_DIR).join(PERSPECTIVES_CACHE_DIR);
-    let perspectives_path = perspectives_dir.join("perspectives.json");
-    let graph_hash = blake3::hash(graph.serialize_compact().as_bytes())
-        .to_hex()
-        .to_string();
-    let perspectives = if perspectives_path.exists() {
-        let mut p = CharacterPerspective::load(&perspectives_path).unwrap_or_default();
-        p.invalidate_by_graph_hash(&graph_hash);
-        p
-    } else {
-        CharacterPerspective::new()
-    };
-
-    let manifest = Manifest::load(&project_root).ok();
-
-    let mut provider = Provider::from_project_config(&config)?;
-    let mut skills = Skills::new();
-
-    // Apply cloud restrictions
-    if !provider.is_local() {
-        for restricted in &config.privacy.restricted_when_cloud {
-            skills.set_permission(restricted, crate::concepts::skills::Permission::Disabled);
-        }
-    }
+    let perspectives_path = project_root
+        .join(LAIRES_DIR)
+        .join(PERSPECTIVES_CACHE_DIR)
+        .join("perspectives.json");
 
     let privacy = if provider.is_local() { "Local" } else { "Cloud" }.to_string();
     let model_name = provider.model_name().to_string();
     let title = config.project.title.clone();
-    let scene_count = scene_map.scene_count();
+    let story = StoryAccess::new(&text_buffer, &scene_map, file_buffer_manager.as_ref());
+    let scene_count = story.scene_count();
     let char_count = graph.get_characters().len();
 
     let canvas = Canvas::new(24, 80);
@@ -179,6 +147,7 @@ pub async fn run_tui() -> anyhow::Result<()> {
         perspectives,
         canvas,
         manifest,
+        file_buffer_manager,
         project_root,
         active_pane: Pane::Chat,
         agent_status: AgentStatus::Idle,
@@ -198,7 +167,6 @@ pub async fn run_tui() -> anyhow::Result<()> {
         privacy,
         model_name,
         should_quit: false,
-        llm_history: Vec::new(),
         overlay_scroll: 0,
         status_expanded: false,
     }));
@@ -216,177 +184,78 @@ pub async fn run_tui() -> anyhow::Result<()> {
     // Spawn async agent task (owns Provider and Skills)
     let agent_app = app.clone();
     let agent_handle = tokio::spawn(async move {
+        let mut session = AgentSession::new();
+        let mut tool_runtime = TuiToolRuntime {
+            app: agent_app.clone(),
+        };
         while let Some(input) = req_rx.recv().await {
-            // 1. Lock app to build context messages, then release
-            let (mut messages, tool_schemas) = {
+            let prepared = {
                 let a = agent_app.lock().await;
-                let graph_json = a.graph.serialize_compact();
-                let pending = a.scene_map.get_pending();
-                let staleness_note = if pending.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        "\n[Note: {} scene(s) have unanalyzed changes.]",
-                        pending.len()
-                    )
-                };
-                let divs = divergence::detect_divergences(&a.graph, &a.intent);
-                let div_note = if divs.is_empty() {
-                    String::new()
-                } else {
-                    let div_json = serde_json::to_string(&divs).unwrap_or_default();
-                    format!("\n\nActive divergences:\n{div_json}")
-                };
-                let context_msg = format!(
-                    "Current narrative graph:\n```json\n{graph_json}\n```{staleness_note}{div_note}"
-                );
-
-                let mut msgs = vec![Message {
-                    role: Role::User,
-                    content: context_msg,
-                    tool_calls: None,
-                    tool_results: None,
-                }];
-                msgs.extend(a.llm_history.clone());
-                msgs.push(Message {
-                    role: Role::User,
-                    content: input.clone(),
-                    tool_calls: None,
-                    tool_results: None,
-                });
-
-                let schemas = skills.tool_schemas();
-                (msgs, schemas)
+                session.prepare_chat_turn(ChatTurnRequest {
+                    user_input: &input,
+                    system_prompt: SYSTEM_PROMPT,
+                    graph: &a.graph,
+                    intent: &a.intent,
+                    text_buffer: &a.text_buffer,
+                    scene_map: &a.scene_map,
+                    file_buffer_manager: a.file_buffer_manager.as_ref(),
+                    skills: &skills,
+                    skill_context: SkillSetContext::Chat,
+                })
             };
-            // Lock released here — UI can render while LLM thinks
-
-            // 2. Multi-turn agent loop
-            let mut turn_count = 0;
-            loop {
-                if turn_count >= MAX_TOOL_TURNS {
+            match session
+                .run_prepared_turn(
+                    &mut provider,
+                    &mut skills,
+                    &mut tool_runtime,
+                    &input,
+                    prepared,
+                    |tool_calls, provider, skills, runtime| {
+                        Box::pin(execute_tui_tool_calls(
+                            runtime,
+                            tool_calls,
+                            provider,
+                            skills,
+                        ))
+                    },
+                    |event| match event {
+                        SessionEvent::ContextPrepared { .. } => {}
+                        SessionEvent::Usage { .. } => {}
+                    },
+                )
+                .await
+            {
+                Ok(turn) => {
                     let mut a = agent_app.lock().await;
+                    a.agent_status = AgentStatus::Idle;
+                    a.chat.history.push(ChatMessage {
+                        role: "assistant".to_string(),
+                        content: turn.final_text,
+                    });
+                }
+                Err(ChatTurnError::MaxToolTurnsReached) => {
+                    let mut a = agent_app.lock().await;
+                    a.agent_status = AgentStatus::Idle;
                     a.chat.history.push(ChatMessage {
                         role: "system".to_string(),
                         content: "[Max tool turns reached]".to_string(),
                     });
-                    a.agent_status = AgentStatus::Idle;
-                    break;
                 }
-
-                // LLM call — no lock held, UI stays responsive
-                match provider
-                    .complete(&messages, &tool_schemas, Some(SYSTEM_PROMPT))
-                    .await
-                {
-                    Ok(response) => {
-                        if response.tool_calls.is_empty() {
-                            // Final text response
-                            let text = response.content.unwrap_or_default();
-                            let mut a = agent_app.lock().await;
-                            a.agent_status = AgentStatus::Idle;
-                            a.chat.history.push(ChatMessage {
-                                role: "assistant".to_string(),
-                                content: text.clone(),
-                            });
-                            // Update LLM history
-                            a.llm_history.push(Message {
-                                role: Role::User,
-                                content: input.clone(),
-                                tool_calls: None,
-                                tool_results: None,
-                            });
-                            a.llm_history.push(Message {
-                                role: Role::Assistant,
-                                content: text,
-                                tool_calls: None,
-                                tool_results: None,
-                            });
-                            let hist_len = a.llm_history.len();
-                            if hist_len > 20 {
-                                a.llm_history.drain(..hist_len - 20);
-                            }
-                            break;
-                        }
-
-                        // Tool calls — lock held during execution
-                        let mut tool_results = Vec::new();
-                        {
-                            let mut guard = agent_app.lock().await;
-                            let a = &mut *guard;
-                            for tc in &response.tool_calls {
-                                a.agent_status =
-                                    AgentStatus::ToolCall(tc.name.clone());
-
-                                let result = {
-                                    let mut ctx = SkillContext {
-                                        text_buffer: &mut a.text_buffer,
-                                        scene_map: &mut a.scene_map,
-                                        graph: &a.graph,
-                                        intent: Some(&mut a.intent),
-                                        perspectives: Some(&mut a.perspectives),
-                                        canvas: Some(&mut a.canvas),
-                                        manifest: a.manifest.as_ref(),
-                                        project_root: Some(&a.project_root),
-                                    };
-                                    skills
-                                        .invoke(
-                                            &tc.name,
-                                            &tc.arguments,
-                                            &mut ctx,
-                                            Some(&mut provider),
-                                        )
-                                        .await
-                                };
-
-                                let truncated = truncate_json(&result, 100);
-                                a.chat.history.push(ChatMessage {
-                                    role: "tool".to_string(),
-                                    content: format!("[{} -> {}]", tc.name, truncated),
-                                });
-
-                                tool_results.push(ToolResult {
-                                    tool_call_id: tc.id.clone(),
-                                    name: tc.name.clone(),
-                                    result,
-                                });
-                            }
-
-                            if a.text_buffer.is_dirty() {
-                                if let Err(e) = a.text_buffer.save() {
-                                    a.chat.history.push(ChatMessage {
-                                        role: "error".to_string(),
-                                        content: format!("Failed to save: {e}"),
-                                    });
-                                }
-                            }
-                        }
-                        // Lock released
-
-                        // Append to conversation for next turn
-                        messages.push(Message {
-                            role: Role::Assistant,
-                            content: response.content.unwrap_or_default(),
-                            tool_calls: Some(response.tool_calls),
-                            tool_results: None,
-                        });
-                        messages.push(Message {
-                            role: Role::User,
-                            content: String::new(),
-                            tool_calls: None,
-                            tool_results: Some(tool_results),
-                        });
-
-                        turn_count += 1;
-                    }
-                    Err(e) => {
-                        let mut a = agent_app.lock().await;
-                        a.agent_status = AgentStatus::Idle;
-                        a.chat.history.push(ChatMessage {
-                            role: "error".to_string(),
-                            content: format!("LLM error: {e}"),
-                        });
-                        break;
-                    }
+                Err(ChatTurnError::EmptyResponse) => {
+                    let mut a = agent_app.lock().await;
+                    a.agent_status = AgentStatus::Idle;
+                    a.chat.history.push(ChatMessage {
+                        role: "error".to_string(),
+                        content: "LLM returned an empty response.".to_string(),
+                    });
+                }
+                Err(ChatTurnError::Provider { source, .. }) => {
+                    let mut a = agent_app.lock().await;
+                    a.agent_status = AgentStatus::Idle;
+                    a.chat.history.push(ChatMessage {
+                        role: "error".to_string(),
+                        content: format!("LLM error: {source}"),
+                    });
                 }
             }
         }
@@ -583,6 +452,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         AgentStatus::ToolCall(name) => format!("Calling: {name}"),
         AgentStatus::Streaming => "Streaming...".to_string(),
     };
+    let story = StoryAccess::new(&app.text_buffer, &app.scene_map, app.file_buffer_manager.as_ref());
 
     if app.status_expanded {
         // Expanded: multi-line status
@@ -618,7 +488,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(bar1, rows[1]);
 
         // Row 2: graph stats
-        let scene_count = app.scene_map.scene_count();
+        let scene_count = story.scene_count();
         let char_count = app.graph.get_characters().len();
         let obj_count = app.graph.get_objectives().len();
         let conflict_count = app.graph.get_conflicts().len();
@@ -635,8 +505,8 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(bar2, rows[2]);
 
         // Row 3: word count + pending + files
-        let word_count = app.text_buffer.word_count();
-        let pending_count = app.scene_map.get_pending().len();
+        let word_count = story.word_count();
+        let pending_count = story.pending_scene_count();
         let file_count = app
             .manifest
             .as_ref()
@@ -658,7 +528,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         let left = format!(" {} | {}", app.privacy, app.model_name);
         let center = format!(
             "{} scenes | {} chars",
-            app.scene_map.scene_count(),
+            story.scene_count(),
             app.graph.get_characters().len()
         );
         let right = format!("[{}] ", status_text);
@@ -792,10 +662,14 @@ fn draw_canvas_pane(f: &mut Frame, app: &App, area: Rect) {
 
     // Render text content with line numbers
     let full_text = app.text_buffer.read_all();
+    let visible_start = app
+        .canvas
+        .scroll_offset()
+        .min(full_text.lines().count().saturating_sub(inner.height as usize));
     let lines: Vec<Line> = full_text
         .lines()
         .enumerate()
-        .skip(app.canvas.scroll_offset())
+        .skip(visible_start)
         .take(inner.height as usize)
         .map(|(i, line_text)| {
             let line_num = format!("{:4} ", i + 1);
@@ -889,9 +763,14 @@ fn toggle_overlay(app: &mut App, kind: OverlayKind) {
             for sid in &dead {
                 issues.push(format!("WARN: Dead scene {sid}"));
             }
-            let pending = app.scene_map.get_pending();
-            if !pending.is_empty() {
-                issues.push(format!("INFO: {} scene(s) pending analysis", pending.len()));
+            let pending_count = StoryAccess::new(
+                &app.text_buffer,
+                &app.scene_map,
+                app.file_buffer_manager.as_ref(),
+            )
+            .pending_scene_count();
+            if pending_count > 0 {
+                issues.push(format!("INFO: {} scene(s) pending analysis", pending_count));
             }
             if issues.is_empty() {
                 issues.push("No issues found.".to_string());
@@ -954,10 +833,22 @@ fn build_file_explorer_content(app: &App) -> Vec<String> {
 
             // Story files
             for sf in &manifest.story_files {
-                let word_count = app
-                    .text_buffer
-                    .word_count();
-                let scene_count = app.scene_map.scene_count();
+                let (word_count, scene_count) = app
+                    .file_buffer_manager
+                    .as_ref()
+                    .and_then(|fbm| fbm.get_entry(&sf.path))
+                    .map(|entry| {
+                        (
+                            entry.text_buffer.word_count(),
+                            entry.scene_map.scene_count(),
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        (
+                            app.text_buffer.word_count(),
+                            app.scene_map.scene_count(),
+                        )
+                    });
                 let path = if sf.path.len() > 38 {
                     format!("..{}", &sf.path[sf.path.len() - 36..])
                 } else {
@@ -1017,18 +908,71 @@ fn build_file_explorer_content(app: &App) -> Vec<String> {
     lines
 }
 
-fn truncate_json(value: &serde_json::Value, max_len: usize) -> String {
-    let s = serde_json::to_string(value).unwrap_or_default();
-    if s.len() > max_len {
-        format!("{}...", &s[..max_len])
-    } else {
-        s
+async fn execute_tui_tool_calls(
+    runtime: &mut TuiToolRuntime,
+    tool_calls: &[ToolCall],
+    provider: &mut crate::concepts::provider::Provider,
+    skills: &mut crate::concepts::skills::Skills,
+) -> Vec<ToolResult> {
+    let mut tool_results = Vec::new();
+    let mut guard = runtime.app.lock().await;
+    let a = &mut *guard;
+
+    for tc in tool_calls {
+        a.agent_status = AgentStatus::ToolCall(tc.name.clone());
+
+        let result = {
+            let mut ctx = SkillContext {
+                text_buffer: &mut a.text_buffer,
+                scene_map: &mut a.scene_map,
+                file_buffer_manager: a.file_buffer_manager.as_mut(),
+                graph: &a.graph,
+                intent: Some(&mut a.intent),
+                perspectives: Some(&mut a.perspectives),
+                manifest: a.manifest.as_ref(),
+                project_root: Some(&a.project_root),
+            };
+            skills
+                .invoke(&tc.name, &tc.arguments, &mut ctx, Some(provider))
+                .await
+        };
+
+        a.chat.history.push(ChatMessage {
+            role: "tool".to_string(),
+            content: format!("[{} -> {}]", tc.name, truncate_json(&result, 100)),
+        });
+
+        tool_results.push(ToolResult {
+            tool_call_id: tc.id.clone(),
+            name: tc.name.clone(),
+            result,
+        });
     }
+
+    if let Some(fbm) = a.file_buffer_manager.as_mut() {
+        if let Err(e) = fbm.save_dirty() {
+            a.chat.history.push(ChatMessage {
+                role: "error".to_string(),
+                content: format!("Failed to save: {e}"),
+            });
+        }
+    }
+    if a.text_buffer.is_dirty() {
+        if let Err(e) = a.text_buffer.save() {
+            a.chat.history.push(ChatMessage {
+                role: "error".to_string(),
+                content: format!("Failed to save: {e}"),
+            });
+        }
+    }
+
+    tool_results
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::concepts::scene_map::ParseMode;
     use ratatui::backend::TestBackend;
 
     #[test]
@@ -1049,6 +993,7 @@ mod tests {
             perspectives: CharacterPerspective::new(),
             canvas: Canvas::new(20, 80),
             manifest: None,
+            file_buffer_manager: None,
             project_root: std::path::PathBuf::from("/tmp"),
             active_pane: Pane::Chat,
             agent_status: AgentStatus::Idle,
@@ -1062,7 +1007,6 @@ mod tests {
             privacy: "Local".to_string(),
             model_name: "test-model".to_string(),
             should_quit: false,
-            llm_history: Vec::new(),
             overlay_scroll: 0,
             status_expanded: false,
         };
@@ -1098,6 +1042,7 @@ mod tests {
             perspectives: CharacterPerspective::new(),
             canvas: Canvas::new(20, 80),
             manifest: None,
+            file_buffer_manager: None,
             project_root: std::path::PathBuf::from("/tmp"),
             active_pane: Pane::Chat,
             agent_status: AgentStatus::Idle,
@@ -1111,7 +1056,6 @@ mod tests {
             privacy: "Local".to_string(),
             model_name: "test".to_string(),
             should_quit: false,
-            llm_history: Vec::new(),
             overlay_scroll: 0,
             status_expanded: false,
         };
@@ -1136,6 +1080,7 @@ mod tests {
             perspectives: CharacterPerspective::new(),
             canvas: Canvas::new(20, 80),
             manifest: None,
+            file_buffer_manager: None,
             project_root: std::path::PathBuf::from("/tmp"),
             active_pane: Pane::Chat,
             agent_status: AgentStatus::Idle,
@@ -1149,7 +1094,6 @@ mod tests {
             privacy: "Local".to_string(),
             model_name: "test".to_string(),
             should_quit: false,
-            llm_history: Vec::new(),
             overlay_scroll: 0,
             status_expanded: false,
         };
@@ -1172,6 +1116,7 @@ mod tests {
             perspectives: CharacterPerspective::new(),
             canvas: Canvas::new(20, 80),
             manifest: None,
+            file_buffer_manager: None,
             project_root: std::path::PathBuf::from("/tmp"),
             active_pane: Pane::Chat,
             agent_status: AgentStatus::Idle,
@@ -1185,7 +1130,6 @@ mod tests {
             privacy: "Local".to_string(),
             model_name: "test".to_string(),
             should_quit: false,
-            llm_history: Vec::new(),
             overlay_scroll: 0,
             status_expanded: false,
         };
@@ -1214,6 +1158,7 @@ mod tests {
             perspectives: CharacterPerspective::new(),
             canvas: Canvas::new(20, 80),
             manifest: None,
+            file_buffer_manager: None,
             project_root: std::path::PathBuf::from("/tmp"),
             active_pane: Pane::Chat,
             agent_status: AgentStatus::Idle,
@@ -1227,7 +1172,6 @@ mod tests {
             privacy: "Local".to_string(),
             model_name: "test".to_string(),
             should_quit: false,
-            llm_history: Vec::new(),
             overlay_scroll: 0,
             status_expanded: false,
         }

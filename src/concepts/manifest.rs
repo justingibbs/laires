@@ -190,6 +190,7 @@ pub struct ManifestDiff {
     pub new_files: Vec<DiscoveredFile>,
     pub changed_files: Vec<DiscoveredFile>,
     pub removed_files: Vec<String>,
+    #[allow(dead_code)]
     pub unchanged_files: Vec<String>,
 }
 

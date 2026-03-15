@@ -636,7 +636,7 @@ fn render_density_row(
 }
 
 /// Generate a simple text insight from available data.
-fn generate_insight(state: &GuiState, snap: &ProjectSnapshot) -> String {
+fn generate_insight(_state: &GuiState, snap: &ProjectSnapshot) -> String {
     let characters = snap
         .graph_nodes
         .iter()

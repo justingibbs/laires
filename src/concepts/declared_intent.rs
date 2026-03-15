@@ -66,6 +66,7 @@ impl DeclaredIntent {
     }
 
     /// Get a specific declaration
+    #[allow(dead_code)]
     pub fn get_declaration(&self, node_id: &str, field: &str) -> Option<&Declaration> {
         let key = DeclKey {
             node_id: node_id.to_string(),
@@ -84,11 +85,13 @@ impl DeclaredIntent {
     }
 
     /// Check if there are any declarations
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.declarations.is_empty()
     }
 
     /// Get the number of declarations
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.declarations.len()
     }

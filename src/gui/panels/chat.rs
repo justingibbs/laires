@@ -54,9 +54,6 @@ pub fn render(ui: &mut egui::Ui, state: &mut GuiState, theme: &LairesTheme) -> b
                 AgentStatus::ToolCall(name) => {
                     render_typing_indicator(ui, &format!("Running {name}..."), theme);
                 }
-                AgentStatus::Streaming => {
-                    render_typing_indicator(ui, "Writing...", theme);
-                }
                 AgentStatus::Idle => {}
             }
         });
@@ -120,7 +117,7 @@ fn render_header(ui: &mut egui::Ui, state: &mut GuiState, theme: &LairesTheme) {
             // Spinner when agent is active
             match &state.agent_status {
                 AgentStatus::Idle => {}
-                AgentStatus::Thinking | AgentStatus::ToolCall(_) | AgentStatus::Streaming => {
+                AgentStatus::Thinking | AgentStatus::ToolCall(_) => {
                     ui.spinner();
                 }
             }

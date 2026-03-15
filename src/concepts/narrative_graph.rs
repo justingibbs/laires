@@ -182,6 +182,7 @@ impl NarrativeGraph {
     }
 
     /// Remove a node and all its edges
+    #[allow(dead_code)]
     pub fn remove_node(&mut self, id: &str) -> Option<GraphNode> {
         if let Some(&idx) = self.index_map.get(id) {
             let node = self.graph.remove_node(idx);
@@ -738,6 +739,7 @@ impl NarrativeGraph {
         out
     }
 
+    #[allow(dead_code)]
     fn rebuild_index_map(&mut self) {
         self.index_map.clear();
         for idx in self.graph.node_indices() {
@@ -761,6 +763,7 @@ pub struct GraphDiff {
 #[derive(Debug)]
 pub struct NodeChange {
     pub id: NodeId,
+    #[allow(dead_code)]
     pub old: GraphNode,
     pub new: GraphNode,
     pub fields: Vec<String>,

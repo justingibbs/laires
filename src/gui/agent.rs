@@ -4,18 +4,20 @@ use tokio::sync::Mutex;
 use crate::concepts::analysis::{
     apply_analysis_to_graph, Analysis, AnalysisKind, AnalysisTask, Priority,
 };
-use crate::concepts::context_budget::{extract_relevant_ids, summarize_history, ContextReport};
 use crate::concepts::file_buffer_manager::FileBufferManager;
 use crate::concepts::manifest::{
     build_classification_prompt, build_manifest_from_classification, discover_files,
     parse_classification_response, Manifest,
 };
-use crate::concepts::provider::{Message, Provider, Role, ToolResult};
+use crate::concepts::provider::{Message, Provider, Role, ToolCall, ToolResult};
 use crate::concepts::skills::{SkillContext, SkillSetContext, Skills};
 use crate::config::LAIRES_DIR;
 use crate::gui::state::{AgentEvent, GuiRequest};
 use crate::gui::ProjectData;
-use crate::sync::divergence;
+use crate::runtime::agent_session::{
+    truncate_json, AgentSession, ChatTurnError, ChatTurnRequest, SessionEvent,
+};
+use crate::runtime::scene_cache::SceneCache;
 
 pub(super) const SYSTEM_PROMPT: &str = r#"You are Laires, an intelligent narrative analysis agent for fiction writers. You have deep understanding of story structure, character arcs, objectives, conflicts, and pacing.
 
@@ -31,7 +33,10 @@ When answering questions:
 
 You can use tools to search the story, read scenes, query the graph, analyze character arcs, run perspective analysis, detect blind spots, lint for consistency issues, check pacing, write/replace text in the canvas, and scan/analyze the manuscript to populate the narrative graph."#;
 
-const MAX_TOOL_TURNS: usize = 10;
+struct GuiToolRuntime {
+    domain: Arc<Mutex<ProjectData>>,
+    events: std::sync::mpsc::Sender<AgentEvent>,
+}
 
 pub async fn agent_loop(
     domain: Arc<Mutex<ProjectData>>,
@@ -40,7 +45,11 @@ pub async fn agent_loop(
     mut provider: Provider,
     mut skills: Skills,
 ) {
-    let mut llm_history: Vec<Message> = Vec::new();
+    let mut session = AgentSession::new();
+    let mut tool_runtime = GuiToolRuntime {
+        domain: domain.clone(),
+        events: events.clone(),
+    };
 
     while let Some(request) = requests.recv().await {
         match request {
@@ -77,7 +86,7 @@ pub async fn agent_loop(
                             let mut guard = domain.lock().await;
                             guard.config = new_config;
                         }
-                        llm_history.clear();
+                        session.clear();
                         let _ = events.send(AgentEvent::Response(format!(
                             "Provider switched to {} ({})",
                             provider.model_name(),
@@ -111,16 +120,14 @@ pub async fn agent_loop(
                 let _ = events.send(AgentEvent::Idle);
             }
             GuiRequest::NewSession => {
-                llm_history.clear();
+                session.clear();
                 let _ = events.send(AgentEvent::Response(
                     "Session cleared. Ready for a new conversation.".to_string(),
                 ));
                 let _ = events.send(AgentEvent::Idle);
             }
             GuiRequest::CompactContext => {
-                let before = llm_history.len();
-                llm_history = summarize_history(&llm_history, 4);
-                let after = llm_history.len();
+                let (before, after) = session.compact_history(4);
                 let _ = events.send(AgentEvent::Response(format!(
                     "Context compacted: {} messages condensed to {}.",
                     before, after
@@ -130,243 +137,90 @@ pub async fn agent_loop(
             GuiRequest::Chat(input) => {
                 let _ = events.send(AgentEvent::Thinking);
 
-                // Build context messages (lock domain, then release)
-                let (mut messages, tool_schemas, context_report) = {
+                let prepared = {
                     let d = domain.lock().await;
-                    let relevant = extract_relevant_ids(&input, &d.graph);
-                    let graph_json = if relevant.is_empty() {
-                        d.graph.serialize_summary()
-                    } else {
-                        let refs: Vec<&str> =
-                            relevant.iter().map(|s| s.as_str()).collect();
-                        d.graph.serialize_subgraph(&refs)
-                    };
-                    let pending = d.scene_map.get_pending();
-                    let staleness_note = if pending.is_empty() {
-                        String::new()
-                    } else {
-                        format!(
-                            "\n[Note: {} scene(s) have unanalyzed changes.]",
-                            pending.len()
-                        )
-                    };
-                    let divs = divergence::detect_divergences(&d.graph, &d.intent);
-                    let div_json = if divs.is_empty() {
-                        String::new()
-                    } else {
-                        serde_json::to_string(&divs).unwrap_or_default()
-                    };
-                    let div_note = if div_json.is_empty() {
-                        String::new()
-                    } else {
-                        format!("\n\nActive divergences:\n{div_json}")
-                    };
-                    let context_msg = format!(
-                        "Current narrative graph:\n```json\n{graph_json}\n```{staleness_note}{div_note}"
-                    );
-
-                    let mut msgs = vec![Message {
-                        role: Role::User,
-                        content: context_msg,
-                        tool_calls: None,
-                        tool_results: None,
-                    }];
-                    // Summarize older history to reduce context usage (C2).
-                    let condensed = summarize_history(&llm_history, 6);
-                    msgs.extend(condensed);
-                    msgs.push(Message {
-                        role: Role::User,
-                        content: input.clone(),
-                        tool_calls: None,
-                        tool_results: None,
-                    });
-
-                    let schemas = skills.tool_schemas_for_context(SkillSetContext::Chat);
-
-                    let report = ContextReport::from_chat_request(
-                        SYSTEM_PROMPT,
-                        &graph_json,
-                        &div_json,
-                        &llm_history,
-                        &input,
-                        &schemas,
-                    );
-
-                    (msgs, schemas, report)
+                    session.prepare_chat_turn(ChatTurnRequest {
+                        user_input: &input,
+                        system_prompt: SYSTEM_PROMPT,
+                        graph: &d.graph,
+                        intent: &d.intent,
+                        text_buffer: &d.text_buffer,
+                        scene_map: &d.scene_map,
+                        file_buffer_manager: d.file_buffer_manager.as_ref(),
+                        skills: &skills,
+                        skill_context: SkillSetContext::Chat,
+                    })
                 };
-                // Domain lock released
-
-                eprintln!("[context] {}", context_report.summary());
-
-                // Multi-turn agent loop
-                let mut turn_count = 0;
-                loop {
-                    if turn_count >= MAX_TOOL_TURNS {
+                match session
+                    .run_prepared_turn(
+                        &mut provider,
+                        &mut skills,
+                        &mut tool_runtime,
+                        &input,
+                        prepared,
+                        |tool_calls, provider, skills, runtime| {
+                            Box::pin(execute_gui_tool_calls(
+                                runtime,
+                                tool_calls,
+                                provider,
+                                skills,
+                            ))
+                        },
+                        |event| match event {
+                            SessionEvent::ContextPrepared { report } => {
+                                eprintln!("[context] {}", report.summary());
+                            }
+                            SessionEvent::Usage {
+                                usage,
+                                context_estimate,
+                            } => {
+                                let _ = events.send(AgentEvent::UsageReport {
+                                    prompt_tokens: usage.prompt_tokens,
+                                    completion_tokens: usage.completion_tokens,
+                                    context_estimate,
+                                });
+                            }
+                        },
+                    )
+                    .await
+                {
+                    Ok(turn) => {
+                        let _ = events.send(AgentEvent::Response(turn.final_text));
+                        let _ = events.send(AgentEvent::Idle);
+                    }
+                    Err(ChatTurnError::MaxToolTurnsReached) => {
                         let _ = events.send(AgentEvent::Error(
                             "[Max tool turns reached]".to_string(),
                         ));
                         let _ = events.send(AgentEvent::Idle);
-                        break;
                     }
-
-                    // LLM call (no lock held)
-                    match provider
-                        .complete(&messages, &tool_schemas, Some(SYSTEM_PROMPT))
-                        .await
-                    {
-                        Ok(response) => {
-                            // Emit usage report (A3)
-                            let _ = events.send(AgentEvent::UsageReport {
-                                prompt_tokens: response.usage.prompt_tokens,
-                                completion_tokens: response.usage.completion_tokens,
-                                context_estimate: context_report.summary(),
-                            });
-
-                            if response.tool_calls.is_empty() {
-                                // Final text response
-                                let text = response.content.unwrap_or_default();
-
-                                // Surface empty responses (A2)
-                                if text.is_empty() {
-                                    let _ = events.send(AgentEvent::Error(
-                                        "LLM returned an empty response. This may indicate \
-                                         the context is too large for the model, a rate limit \
-                                         was hit, or the API returned an error. Check provider \
-                                         logs."
-                                            .to_string(),
-                                    ));
-                                    let _ = events.send(AgentEvent::Idle);
-                                    break;
-                                }
-
-                                let _ = events.send(AgentEvent::Response(text.clone()));
-                                let _ = events.send(AgentEvent::Idle);
-
-                                // Safety (C1): Only raw user input and final assistant
-                                // text are stored in llm_history. Graph context, tool
-                                // calls, and tool results accumulate in the `messages`
-                                // vec during the multi-turn loop but are never persisted.
-                                llm_history.push(Message {
-                                    role: Role::User,
-                                    content: input.clone(),
-                                    tool_calls: None,
-                                    tool_results: None,
-                                });
-                                llm_history.push(Message {
-                                    role: Role::Assistant,
-                                    content: text,
-                                    tool_calls: None,
-                                    tool_results: None,
-                                });
-                                if llm_history.len() > 20 {
-                                    let drain = llm_history.len() - 20;
-                                    llm_history.drain(..drain);
-                                }
-                                break;
-                            }
-
-                            // Tool calls — lock domain during execution
-                            let mut tool_results = Vec::new();
-                            {
-                                let mut guard = domain.lock().await;
-                                let d = &mut *guard;
-                                for tc in &response.tool_calls {
-                                    let args_summary = truncate_json(&tc.arguments, 80);
-                                    let _ = events.send(AgentEvent::ToolCall {
-                                        name: tc.name.clone(),
-                                        args_summary: args_summary.clone(),
-                                    });
-
-                                    let result = if tc.name == "scan_story" {
-                                        // Intercept scan_story — run directly with mutable domain access
-                                        match run_gui_scan(d, &mut provider, &events).await {
-                                            Ok(summary) => serde_json::json!({ "result": summary }),
-                                            Err(e) => serde_json::json!({ "error": e.to_string() }),
-                                        }
-                                    } else {
-                                        let mut ctx = SkillContext {
-                                            text_buffer: &mut d.text_buffer,
-                                            scene_map: &mut d.scene_map,
-                                            graph: &d.graph,
-                                            intent: Some(&mut d.intent),
-                                            perspectives: Some(&mut d.perspectives),
-                                            canvas: Some(&mut d.canvas),
-                                            manifest: d.manifest.as_ref(),
-                                            project_root: Some(&d.project_root),
-                                        };
-                                        skills
-                                            .invoke(
-                                                &tc.name,
-                                                &tc.arguments,
-                                                &mut ctx,
-                                                Some(&mut provider),
-                                            )
-                                            .await
-                                    };
-
-                                    let result_summary = truncate_json(&result, 100);
-                                    let _ = events.send(AgentEvent::ToolResult {
-                                        name: tc.name.clone(),
-                                        result_summary,
-                                    });
-
-                                    tool_results.push(ToolResult {
-                                        tool_call_id: tc.id.clone(),
-                                        name: tc.name.clone(),
-                                        result,
-                                    });
-                                }
-
-                                if d.text_buffer.is_dirty() {
-                                    if let Err(e) = d.text_buffer.save() {
-                                        let _ = events.send(AgentEvent::Error(format!(
-                                            "Failed to save: {e}"
-                                        )));
-                                    }
-                                }
-                            }
-                            // Domain lock released
-
-                            let _ = events.send(AgentEvent::StateChanged);
-
-                            // Append to conversation for next turn
-                            messages.push(Message {
-                                role: Role::Assistant,
-                                content: response.content.unwrap_or_default(),
-                                tool_calls: Some(response.tool_calls),
-                                tool_results: None,
-                            });
-                            messages.push(Message {
-                                role: Role::User,
-                                content: String::new(),
-                                tool_calls: None,
-                                tool_results: Some(tool_results),
-                            });
-
-                            turn_count += 1;
-                        }
-                        Err(e) => {
-                            let err_str = e.to_string();
-                            let hint = if err_str.contains("too large")
-                                || err_str.contains("context_length")
-                                || err_str.contains("maximum context")
-                                || err_str.contains("token")
-                                || err_str.contains("413")
-                                || err_str.contains("400")
-                            {
-                                format!(
-                                    " (estimated context: {})",
-                                    context_report.summary()
-                                )
-                            } else {
-                                String::new()
-                            };
-                            let _ = events.send(AgentEvent::Error(format!(
-                                "LLM error: {err_str}{hint}"
-                            )));
-                            let _ = events.send(AgentEvent::Idle);
-                            break;
-                        }
+                    Err(ChatTurnError::EmptyResponse) => {
+                        let _ = events.send(AgentEvent::Error(
+                            "LLM returned an empty response. This may indicate the context is too large for the model, a rate limit was hit, or the API returned an error. Check provider logs."
+                                .to_string(),
+                        ));
+                        let _ = events.send(AgentEvent::Idle);
+                    }
+                    Err(ChatTurnError::Provider {
+                        source,
+                        context_estimate,
+                    }) => {
+                        let err_str = source.to_string();
+                        let hint = if err_str.contains("too large")
+                            || err_str.contains("context_length")
+                            || err_str.contains("maximum context")
+                            || err_str.contains("token")
+                            || err_str.contains("413")
+                            || err_str.contains("400")
+                        {
+                            format!(" (estimated context: {})", context_estimate)
+                        } else {
+                            String::new()
+                        };
+                        let _ = events.send(AgentEvent::Error(format!(
+                            "LLM error: {err_str}{hint}"
+                        )));
+                        let _ = events.send(AgentEvent::Idle);
                     }
                 }
             }
@@ -508,18 +362,9 @@ async fn run_gui_scan(
         }
     }
 
-    // Persist graph and per-file scene maps
+    // Persist graph and aggregate scene cache
     d.graph.save(&graph_path)?;
-    for entry in fbm.entries() {
-        let stem = std::path::Path::new(&entry.file_path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("scenes");
-        let scenes_filename = format!("scenes_{stem}.json");
-        entry
-            .scene_map
-            .save(&project_root.join(LAIRES_DIR).join(scenes_filename))?;
-    }
+    SceneCache::from_file_buffer_manager(&fbm).save_to_project(&project_root)?;
 
     // Persist FBM into ProjectData so sidebar can read it
     d.file_buffer_manager = Some(fbm);
@@ -601,15 +446,16 @@ async fn run_scan_single_buffer(
     }
 
     d.graph.save(graph_path)?;
+    let file_path_str = d.text_buffer.file_path().to_string_lossy().to_string();
+    let rel_path = file_path_str
+        .strip_prefix(&d.project_root.to_string_lossy().as_ref())
+        .unwrap_or(&file_path_str)
+        .trim_start_matches('/')
+        .to_string();
+    SceneCache::from_single_file(rel_path.clone(), &d.scene_map).save_to_project(&d.project_root)?;
 
     // Create a manifest from the loaded story file so the Files tab is populated
     if d.manifest.is_none() {
-        let file_path_str = d.text_buffer.file_path().to_string_lossy().to_string();
-        let rel_path = file_path_str
-            .strip_prefix(&d.project_root.to_string_lossy().as_ref())
-            .unwrap_or(&file_path_str)
-            .trim_start_matches('/')
-            .to_string();
         let content_hash = blake3::hash(d.text_buffer.read_all().as_bytes())
             .to_hex()
             .to_string();
@@ -642,11 +488,71 @@ async fn run_scan_single_buffer(
     Ok(summary)
 }
 
-fn truncate_json(value: &serde_json::Value, max_len: usize) -> String {
-    let s = serde_json::to_string(value).unwrap_or_default();
-    if s.len() > max_len {
-        format!("{}...", &s[..max_len])
-    } else {
-        s
+async fn execute_gui_tool_calls(
+    runtime: &mut GuiToolRuntime,
+    tool_calls: &[ToolCall],
+    provider: &mut Provider,
+    skills: &mut Skills,
+) -> Vec<ToolResult> {
+    let mut tool_results = Vec::new();
+    let mut guard = runtime.domain.lock().await;
+    let d = &mut *guard;
+
+    for tc in tool_calls {
+        let args_summary = truncate_json(&tc.arguments, 80);
+        let _ = runtime.events.send(AgentEvent::ToolCall {
+            name: tc.name.clone(),
+            args_summary,
+        });
+
+        let result = if tc.name == "scan_story" {
+            match run_gui_scan(d, provider, &runtime.events).await {
+                Ok(summary) => serde_json::json!({ "result": summary }),
+                Err(e) => serde_json::json!({ "error": e.to_string() }),
+            }
+        } else {
+            let mut ctx = SkillContext {
+                text_buffer: &mut d.text_buffer,
+                scene_map: &mut d.scene_map,
+                file_buffer_manager: d.file_buffer_manager.as_mut(),
+                graph: &d.graph,
+                intent: Some(&mut d.intent),
+                perspectives: Some(&mut d.perspectives),
+                manifest: d.manifest.as_ref(),
+                project_root: Some(&d.project_root),
+            };
+            skills
+                .invoke(&tc.name, &tc.arguments, &mut ctx, Some(provider))
+                .await
+        };
+
+        let _ = runtime.events.send(AgentEvent::ToolResult {
+            name: tc.name.clone(),
+            result_summary: truncate_json(&result, 100),
+        });
+
+        tool_results.push(ToolResult {
+            tool_call_id: tc.id.clone(),
+            name: tc.name.clone(),
+            result,
+        });
     }
+
+    if let Some(fbm) = d.file_buffer_manager.as_mut() {
+        if let Err(e) = fbm.save_dirty() {
+            let _ = runtime
+                .events
+                .send(AgentEvent::Error(format!("Failed to save: {e}")));
+        }
+    }
+    if d.text_buffer.is_dirty() {
+        if let Err(e) = d.text_buffer.save() {
+            let _ = runtime
+                .events
+                .send(AgentEvent::Error(format!("Failed to save: {e}")));
+        }
+    }
+
+    let _ = runtime.events.send(AgentEvent::StateChanged);
+    tool_results
 }

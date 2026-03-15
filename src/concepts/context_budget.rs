@@ -12,8 +12,10 @@ pub fn estimate_tokens(text: &str) -> usize {
 pub struct ContextReport {
     pub system_prompt_tokens: usize,
     pub graph_tokens: usize,
+    #[allow(dead_code)]
     pub divergence_tokens: usize,
     pub history_tokens: usize,
+    #[allow(dead_code)]
     pub user_message_tokens: usize,
     pub tool_schema_tokens: usize,
     pub total_tokens: usize,

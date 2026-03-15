@@ -519,10 +519,12 @@ impl Provider {
         &self.config.model
     }
 
+    #[allow(dead_code)]
     pub fn metrics(&self) -> &UsageMetrics {
         &self.metrics
     }
 
+    #[allow(dead_code)]
     pub fn config(&self) -> &ProviderConfig {
         &self.config
     }

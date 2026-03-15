@@ -12,17 +12,10 @@ use std::time::Duration;
 use eframe::egui::{self, RichText};
 use tokio::sync::Mutex;
 
-use crate::concepts::canvas::Canvas;
 use crate::concepts::character_perspective::CharacterPerspective;
-use crate::concepts::declared_intent::DeclaredIntent;
-use crate::concepts::file_buffer_manager::FileBufferManager;
-use crate::concepts::manifest::Manifest;
-use crate::concepts::narrative_graph::NarrativeGraph;
-use crate::concepts::provider::Provider;
-use crate::concepts::scene_map::{ParseMode, SceneMap};
-use crate::concepts::skills::{Permission, Skills};
-use crate::concepts::text_buffer::TextBuffer;
-use crate::config::{self, ProjectConfig, LAIRES_DIR, OVERRIDES_FILE, PERSPECTIVES_CACHE_DIR};
+use crate::config::{self, ProjectConfig, LAIRES_DIR};
+use crate::runtime::project_loader::{load_project, LoadedProject, ProjectLoadResult};
+use crate::runtime::story_access::StoryAccess;
 
 use state::{AgentEvent, AgentStatus, AppMode, ChatMessage, ChatRole, GuiRequest, GuiState, RightTab, ToolCallDisplay};
 use theme::LairesTheme;
@@ -30,14 +23,13 @@ use welcome::{RecentProjects, WelcomeAction};
 
 /// Loaded project data — shared between GUI and agent via Arc<Mutex<>>.
 pub(crate) struct ProjectData {
-    pub text_buffer: TextBuffer,
-    pub scene_map: SceneMap,
-    pub graph: NarrativeGraph,
-    pub intent: DeclaredIntent,
+    pub text_buffer: crate::concepts::text_buffer::TextBuffer,
+    pub scene_map: crate::concepts::scene_map::SceneMap,
+    pub graph: crate::concepts::narrative_graph::NarrativeGraph,
+    pub intent: crate::concepts::declared_intent::DeclaredIntent,
     pub perspectives: CharacterPerspective,
-    pub canvas: Canvas,
-    pub manifest: Option<Manifest>,
-    pub file_buffer_manager: Option<FileBufferManager>,
+    pub manifest: Option<crate::concepts::manifest::Manifest>,
+    pub file_buffer_manager: Option<crate::concepts::file_buffer_manager::FileBufferManager>,
     pub project_root: PathBuf,
     pub config: ProjectConfig,
 }
@@ -183,15 +175,6 @@ impl GuiApp {
                         tc.result_summary = result_summary;
                     }
                 }
-                AgentEvent::StreamChunk(chunk) => {
-                    self.gui_state.agent_status = AgentStatus::Streaming;
-                    // Append to the last assistant message or create one
-                    if let Some(last) = self.gui_state.chat_history.last_mut() {
-                        if last.role == ChatRole::Assistant {
-                            last.content.push_str(&chunk);
-                        }
-                    }
-                }
                 AgentEvent::Response(text) => {
                     let tool_calls = std::mem::take(&mut self.pending_tool_calls);
                     self.gui_state.chat_history.push(ChatMessage {
@@ -215,17 +198,14 @@ impl GuiApp {
                     if let Some(d) = &self.domain {
                         if let Ok(proj) = d.try_lock() {
                             self.snapshot = Some(build_snapshot(&proj));
-                            self.gui_state.scene_count = proj
-                                .file_buffer_manager
-                                .as_ref()
-                                .map(|fbm| fbm.total_scene_count())
-                                .unwrap_or_else(|| proj.scene_map.scene_count());
+                            let story = StoryAccess::new(
+                                &proj.text_buffer,
+                                &proj.scene_map,
+                                proj.file_buffer_manager.as_ref(),
+                            );
+                            self.gui_state.scene_count = story.scene_count();
                             self.gui_state.char_count = proj.graph.get_characters().len();
-                            self.gui_state.word_count = proj
-                                .file_buffer_manager
-                                .as_ref()
-                                .map(|fbm| fbm.total_word_count())
-                                .unwrap_or_else(|| proj.text_buffer.word_count());
+                            self.gui_state.word_count = story.word_count();
                             self.gui_state.graph_needs_rebuild = true;
                         }
                     }
@@ -653,7 +633,11 @@ impl GuiApp {
         self.snapshot = None;
 
         match load_project_from_path(&path) {
-            Ok((data, provider, skills, privacy, model_name, scene_count, char_count, word_count)) => {
+            Ok(load_result) => {
+                let data = into_gui_project_data(load_result.project);
+                let provider = load_result.provider;
+                let skills = load_result.skills;
+                let summary = load_result.summary;
                 let title = data.config.project.title.clone();
                 let domain = Arc::new(Mutex::new(data));
 
@@ -680,15 +664,15 @@ impl GuiApp {
                 }
 
                 // Reset GUI state for the new project
-                let ctx_window_max = state::context_window_for_model(&model_name);
+                let ctx_window_max = state::context_window_for_model(&summary.model_name);
                 self.gui_state = GuiState {
                     app_mode: AppMode::Project,
                     project_title: title.clone(),
-                    privacy_label: privacy,
-                    model_name,
-                    scene_count,
-                    char_count,
-                    word_count,
+                    privacy_label: summary.privacy_label,
+                    model_name: summary.model_name,
+                    scene_count: summary.scene_count,
+                    char_count: summary.char_count,
+                    word_count: summary.word_count,
                     chat_history: vec![ChatMessage {
                         role: ChatRole::System,
                         content: "Welcome to Laires. Ask me anything about your story.".to_string(),
@@ -1218,102 +1202,25 @@ fn build_snapshot(proj: &ProjectData) -> ProjectSnapshot {
     }
 }
 
+fn into_gui_project_data(project: LoadedProject) -> ProjectData {
+    ProjectData {
+        text_buffer: project.text_buffer,
+        scene_map: project.scene_map,
+        graph: project.graph,
+        intent: project.intent,
+        perspectives: project.perspectives,
+        manifest: project.manifest,
+        file_buffer_manager: project.file_buffer_manager,
+        project_root: project.project_root,
+        config: project.config,
+    }
+}
+
 /// Load project data from a specific path.
-fn load_project_from_path(
-    start: &Path,
-) -> anyhow::Result<(ProjectData, Provider, Skills, String, String, usize, usize, usize)> {
+fn load_project_from_path(start: &Path) -> anyhow::Result<ProjectLoadResult> {
     let project_root = config::find_project_root(start)
         .ok_or_else(|| anyhow::anyhow!("No .laires/ directory found at {}", start.display()))?;
-
-    let config = ProjectConfig::load(&project_root)?;
-    let story_path = config::story_file_path(&project_root, &config.project.format);
-
-    if !story_path.exists() {
-        anyhow::bail!("Story file not found: {}", story_path.display());
-    }
-
-    let text_buffer = TextBuffer::from_file(story_path)?;
-    let full_text = text_buffer.read_all();
-
-    let parse_mode = match config.project.format.as_str() {
-        "fountain" => ParseMode::Fountain,
-        _ => ParseMode::Prose,
-    };
-    let mut scene_map = SceneMap::new(parse_mode);
-    scene_map.full_reindex(&full_text, "");
-
-    let graph_path = project_root.join(LAIRES_DIR).join("graph.json");
-    let graph = if graph_path.exists() {
-        NarrativeGraph::load(&graph_path).unwrap_or_default()
-    } else {
-        NarrativeGraph::new()
-    };
-
-    let overrides_path = project_root.join(LAIRES_DIR).join(OVERRIDES_FILE);
-    let intent = if overrides_path.exists() {
-        DeclaredIntent::load(&overrides_path).unwrap_or_default()
-    } else {
-        DeclaredIntent::new()
-    };
-
-    let perspectives_dir = project_root.join(LAIRES_DIR).join(PERSPECTIVES_CACHE_DIR);
-    let perspectives_path = perspectives_dir.join("perspectives.json");
-    let graph_hash = blake3::hash(graph.serialize_compact().as_bytes())
-        .to_hex()
-        .to_string();
-    let perspectives = if perspectives_path.exists() {
-        let mut p = CharacterPerspective::load(&perspectives_path).unwrap_or_default();
-        p.invalidate_by_graph_hash(&graph_hash);
-        p
-    } else {
-        CharacterPerspective::new()
-    };
-
-    let manifest = Manifest::load(&project_root).ok();
-
-    // Build FileBufferManager from manifest if available
-    let file_buffer_manager = manifest
-        .as_ref()
-        .and_then(|m| FileBufferManager::from_manifest(m, &project_root).ok());
-
-    let provider = Provider::from_project_config(&config)?;
-    let privacy = if provider.is_local() { "Local" } else { "Cloud" }.to_string();
-    let model_name = provider.model_name().to_string();
-
-    // Use FBM counts when available, otherwise fall back to single scene_map/text_buffer
-    let scene_count = file_buffer_manager
-        .as_ref()
-        .map(|fbm| fbm.total_scene_count())
-        .unwrap_or_else(|| scene_map.scene_count());
-    let char_count = graph.get_characters().len();
-    let word_count = file_buffer_manager
-        .as_ref()
-        .map(|fbm| fbm.total_word_count())
-        .unwrap_or_else(|| text_buffer.word_count());
-
-    let canvas = Canvas::new(24, 80);
-
-    let mut skills = Skills::new();
-    if !provider.is_local() {
-        for restricted in &config.privacy.restricted_when_cloud {
-            skills.set_permission(restricted, Permission::Disabled);
-        }
-    }
-
-    let data = ProjectData {
-        text_buffer,
-        scene_map,
-        graph,
-        intent,
-        perspectives,
-        canvas,
-        manifest,
-        file_buffer_manager,
-        project_root,
-        config,
-    };
-
-    Ok((data, provider, skills, privacy, model_name, scene_count, char_count, word_count))
+    load_project(&project_root)
 }
 
 pub async fn run_gui(project_path: Option<PathBuf>) -> anyhow::Result<()> {
@@ -1336,17 +1243,21 @@ pub async fn run_gui(project_path: Option<PathBuf>) -> anyhow::Result<()> {
     // Try to load the project if we have a start path
     let (domain, gui_tx, gui_rx, gui_state) = if let Some(path) = start_path {
         match load_project_from_path(&path) {
-            Ok((data, provider, skills, privacy, model_name, scene_count, char_count, word_count)) => {
+            Ok(load_result) => {
+                let data = into_gui_project_data(load_result.project);
+                let provider = load_result.provider;
+                let skills = load_result.skills;
+                let summary = load_result.summary;
                 let title = data.config.project.title.clone();
                 let mut gs = GuiState::default();
                 gs.app_mode = AppMode::Project;
                 gs.project_title = title.clone();
-                gs.privacy_label = privacy;
-                gs.model_name = model_name.clone();
-                gs.scene_count = scene_count;
-                gs.char_count = char_count;
-                gs.word_count = word_count;
-                gs.context_window_max = state::context_window_for_model(&model_name);
+                gs.privacy_label = summary.privacy_label;
+                gs.model_name = summary.model_name.clone();
+                gs.scene_count = summary.scene_count;
+                gs.char_count = summary.char_count;
+                gs.word_count = summary.word_count;
+                gs.context_window_max = state::context_window_for_model(&summary.model_name);
                 gs.chat_history = vec![ChatMessage {
                     role: ChatRole::System,
                     content: "Welcome to Laires. Ask me anything about your story.".to_string(),

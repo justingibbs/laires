@@ -3,6 +3,7 @@ mod concepts;
 mod config;
 mod error;
 mod gui;
+mod runtime;
 mod sync;
 
 use clap::Parser;

@@ -38,7 +38,7 @@ pub enum ParseMode {
     Fountain,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SceneMap {
     scenes: Vec<SceneSpan>,
     parse_mode: ParseMode,
@@ -183,6 +183,7 @@ impl SceneMap {
     }
 
     /// Incrementally update scene boundaries affected by changes
+    #[allow(dead_code)]
     pub fn reindex(&mut self, text: &str, file_path: &str, changed_ranges: &[ByteRange]) {
         // For simplicity in Phase 1, do a full reindex but preserve scene IDs
         // where content hasn't changed
@@ -225,6 +226,7 @@ impl SceneMap {
     }
 
     /// Get the scene containing a byte offset
+    #[allow(dead_code)]
     pub fn get_scene_at(&self, offset: usize) -> Option<&SceneSpan> {
         self.scenes
             .iter()
@@ -252,6 +254,7 @@ impl SceneMap {
     }
 
     /// Save scene map to disk
+    #[allow(dead_code)]
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
         let json = serde_json::to_string_pretty(self)?;
         std::fs::write(path, json)?;
@@ -259,6 +262,7 @@ impl SceneMap {
     }
 
     /// Load scene map from disk
+    #[allow(dead_code)]
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
         let map: SceneMap = serde_json::from_str(&content)?;

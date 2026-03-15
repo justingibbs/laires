@@ -80,6 +80,7 @@ impl CharacterPerspective {
     }
 
     /// Get a cached perspective for a character
+    #[allow(dead_code)]
     pub fn get_perspective(&self, character_id: &str) -> Option<&Perspective> {
         self.perspectives.get(character_id)
     }
@@ -107,6 +108,7 @@ impl CharacterPerspective {
     }
 
     /// Invalidate all cached perspectives for a character
+    #[allow(dead_code)]
     pub fn invalidate(&mut self, character_id: &str) {
         self.perspectives.remove(character_id);
         self.scene_perspectives
@@ -114,6 +116,7 @@ impl CharacterPerspective {
     }
 
     /// Invalidate a specific scene perspective
+    #[allow(dead_code)]
     pub fn invalidate_scene(&mut self, character_id: &str, scene_id: &str) {
         self.scene_perspectives
             .remove(&(character_id.to_string(), scene_id.to_string()));
