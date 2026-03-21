@@ -931,6 +931,7 @@ async fn execute_tui_tool_calls(
                 perspectives: Some(&mut a.perspectives),
                 manifest: a.manifest.as_ref(),
                 project_root: Some(&a.project_root),
+                revision_brief: None,
             };
             skills
                 .invoke(&tc.name, &tc.arguments, &mut ctx, Some(provider))
@@ -1269,6 +1270,7 @@ mod tests {
                 format: "prose".to_string(),
                 order: 1,
                 content_hash: "abc".to_string(),
+                editable: true,
             }],
             context_files: vec![crate::concepts::manifest::ContextFile {
                 path: "outline.md".to_string(),

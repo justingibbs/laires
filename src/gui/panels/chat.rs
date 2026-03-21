@@ -1,6 +1,6 @@
 use eframe::egui::{self, Color32, CornerRadius, RichText, Stroke, Vec2};
 
-use crate::gui::state::{AgentStatus, ChatRole, GuiState};
+use crate::gui::state::{AgentStatus, ChatRole, GuiState, SessionMode};
 use crate::gui::theme::LairesTheme;
 
 const AVATAR_SIZE: f32 = 28.0;
@@ -66,12 +66,21 @@ pub fn render(ui: &mut egui::Ui, state: &mut GuiState, theme: &LairesTheme) -> b
 /// Renders the compact header: Chat label, context bar, New Session button, spinner.
 fn render_header(ui: &mut egui::Ui, state: &mut GuiState, theme: &LairesTheme) {
     ui.horizontal(|ui| {
-        // "Chat" label
+        // "Chat" label + mode hint
         ui.label(
             RichText::new("Chat")
                 .color(theme.text_primary)
                 .size(15.0)
                 .strong(),
+        );
+        let mode_hint = match state.session_mode {
+            SessionMode::Consultant => "analysis only",
+            SessionMode::Workshop => "editing enabled",
+        };
+        ui.label(
+            RichText::new(format!("({mode_hint})"))
+                .color(theme.text_secondary)
+                .size(10.0),
         );
 
         ui.add_space(8.0);

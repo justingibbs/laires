@@ -8,6 +8,7 @@ pub mod file_buffer_manager;
 pub mod manifest;
 pub mod narrative_graph;
 pub mod provider;
+pub mod revision_brief;
 pub mod scene_map;
 pub mod skills;
 pub mod text_buffer;

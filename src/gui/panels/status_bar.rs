@@ -1,6 +1,6 @@
 use eframe::egui::{self, Color32, CornerRadius, RichText, Stroke};
 
-use crate::gui::state::{AgentStatus, AppMode, GuiState};
+use crate::gui::state::{AgentStatus, AppMode, GuiState, SessionMode};
 use crate::gui::theme::LairesTheme;
 
 /// Renders the top navigation bar (branded header with search + actions).
@@ -72,6 +72,32 @@ pub fn render(ctx: &egui::Context, state: &GuiState, theme: &LairesTheme) {
                         );
                     }
                 });
+
+                // === Session mode toggle badge ===
+                ui.add_space(8.0);
+                let (mode_label, mode_color) = match state.session_mode {
+                    SessionMode::Consultant => ("Consultant", Color32::from_rgb(59, 130, 246)),
+                    SessionMode::Workshop => ("Workshop", Color32::from_rgb(34, 197, 94)),
+                };
+                let btn = egui::Button::new(
+                    RichText::new(mode_label)
+                        .color(mode_color)
+                        .size(10.0)
+                        .strong(),
+                )
+                .fill(mode_color.gamma_multiply(0.15))
+                .stroke(Stroke::NONE)
+                .corner_radius(CornerRadius::same(4));
+                let tooltip = match state.session_mode {
+                    SessionMode::Consultant => "Switch to Workshop mode (live editing)",
+                    SessionMode::Workshop => "Switch to Consultant mode (read-only analysis)",
+                };
+                if ui.add(btn).on_hover_text(tooltip).clicked() {
+                    ctx.memory_mut(|mem| {
+                        mem.data
+                            .insert_temp(egui::Id::new("switch_mode"), true);
+                    });
+                }
 
                 // === Center: Search bar (takes remaining space) ===
                 ui.add_space(24.0);

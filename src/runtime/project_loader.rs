@@ -167,6 +167,7 @@ mod tests {
             project: ProjectMeta {
                 title: "Test Project".to_string(),
                 format: "prose".to_string(),
+                default_mode: None,
             },
             analysis: AnalysisConfig::default(),
             privacy: PrivacyConfig {
@@ -267,12 +268,14 @@ mod tests {
                     format: "prose".to_string(),
                     order: 1,
                     content_hash: "h1".to_string(),
+                    editable: true,
                 },
                 StoryFile {
                     path: "chapters/two.md".to_string(),
                     format: "prose".to_string(),
                     order: 2,
                     content_hash: "h2".to_string(),
+                    editable: true,
                 },
             ],
             context_files: vec![],

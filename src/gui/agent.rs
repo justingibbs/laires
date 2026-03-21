@@ -12,14 +12,14 @@ use crate::concepts::manifest::{
 use crate::concepts::provider::{Message, Provider, Role, ToolCall, ToolResult};
 use crate::concepts::skills::{SkillContext, SkillSetContext, Skills};
 use crate::config::LAIRES_DIR;
-use crate::gui::state::{AgentEvent, GuiRequest};
+use crate::gui::state::{AgentEvent, GuiRequest, SessionMode};
 use crate::gui::ProjectData;
 use crate::runtime::agent_session::{
     truncate_json, AgentSession, ChatTurnError, ChatTurnRequest, SessionEvent,
 };
 use crate::runtime::scene_cache::SceneCache;
 
-pub(super) const SYSTEM_PROMPT: &str = r#"You are Laires, an intelligent narrative analysis agent for fiction writers. You have deep understanding of story structure, character arcs, objectives, conflicts, and pacing.
+const SYSTEM_PROMPT_BASE: &str = r#"You are Laires, an intelligent narrative analysis agent for fiction writers. You have deep understanding of story structure, character arcs, objectives, conflicts, and pacing.
 
 You are helping a writer analyze and develop their manuscript. You have access to a narrative graph that maps characters, objectives, conflicts, and scenes. You also have tools to search and read the story text, analyze from character perspectives, detect structural issues, and compare how different characters experience the same events.
 
@@ -29,9 +29,48 @@ When answering questions:
 - Be honest about confidence levels
 - If the graph is incomplete or stale, mention it
 - Offer structural insights, not just surface observations
-- Use multiple tools when needed to build a complete picture
+- Use multiple tools when needed to build a complete picture"#;
 
-You can use tools to search the story, read scenes, query the graph, analyze character arcs, run perspective analysis, detect blind spots, lint for consistency issues, check pacing, write/replace text in the canvas, and scan/analyze the manuscript to populate the narrative graph."#;
+const SYSTEM_PROMPT_CONSULTANT: &str = r#"
+
+You are in CONSULTANT mode. The writer's files are read-only — do not attempt to modify any files.
+
+When the writer asks you to make changes or improve something:
+- Describe exactly what should change, referencing the specific scene, file, and location
+- Explain why the change would improve the story
+- Optionally provide a draft passage they can adapt in their own editor
+- Use the `add_to_brief` tool to record each revision suggestion with scene_title, file, priority, issue, and suggestion
+- When the conversation reaches a natural conclusion, use `generate_brief` to finalize and export a Markdown revision brief
+
+The revision brief is the key deliverable in Consultant mode — a structured document the writer takes back to their own editor.
+
+You can search the story, read scenes, query the graph, analyze character arcs, run perspective analysis, detect blind spots, lint for consistency issues, check pacing, and scan/analyze the manuscript."#;
+
+const SYSTEM_PROMPT_WORKSHOP: &str = r#"
+
+You are in WORKSHOP mode. You can directly edit .md and .fountain files using canvas tools.
+
+When the writer asks you to make changes:
+- Explain what you plan to change before making edits
+- Use write_to_canvas, replace_in_canvas, or insert_scene to modify files
+- After significant edits, suggest running scan_story to update the narrative graph
+
+You can search the story, read scenes, query the graph, analyze character arcs, run perspective analysis, detect blind spots, lint for consistency issues, check pacing, write/replace text in the canvas, and scan/analyze the manuscript."#;
+
+pub(super) fn system_prompt_for_mode(mode: SessionMode) -> String {
+    let suffix = match mode {
+        SessionMode::Consultant => SYSTEM_PROMPT_CONSULTANT,
+        SessionMode::Workshop => SYSTEM_PROMPT_WORKSHOP,
+    };
+    format!("{SYSTEM_PROMPT_BASE}{suffix}")
+}
+
+fn skill_context_for_mode(mode: SessionMode) -> SkillSetContext {
+    match mode {
+        SessionMode::Consultant => SkillSetContext::Consultant,
+        SessionMode::Workshop => SkillSetContext::Workshop,
+    }
+}
 
 struct GuiToolRuntime {
     domain: Arc<Mutex<ProjectData>>,
@@ -44,15 +83,26 @@ pub async fn agent_loop(
     events: std::sync::mpsc::Sender<AgentEvent>,
     mut provider: Provider,
     mut skills: Skills,
+    initial_mode: SessionMode,
 ) {
     let mut session = AgentSession::new();
     let mut tool_runtime = GuiToolRuntime {
         domain: domain.clone(),
         events: events.clone(),
     };
+    let mut current_mode = initial_mode;
 
     while let Some(request) = requests.recv().await {
         match request {
+            GuiRequest::SwitchMode(new_mode) => {
+                current_mode = new_mode;
+                let _ = events.send(AgentEvent::Response(format!(
+                    "Switched to **{}** mode.",
+                    current_mode
+                )));
+                let _ = events.send(AgentEvent::Idle);
+                continue;
+            }
             GuiRequest::Scan => {
                 let _ = events.send(AgentEvent::Thinking);
                 let mut guard = domain.lock().await;
@@ -120,10 +170,37 @@ pub async fn agent_loop(
                 let _ = events.send(AgentEvent::Idle);
             }
             GuiRequest::NewSession => {
+                // Auto-save brief if there are pending revisions
+                {
+                    let mut guard = domain.lock().await;
+                    if let Some(ref brief) = guard.revision_brief {
+                        if !brief.is_empty() {
+                            match brief.save_to_project(&guard.project_root) {
+                                Ok(path) => {
+                                    let _ = events.send(AgentEvent::Response(format!(
+                                        "Revision brief saved to `{}`.",
+                                        path.display()
+                                    )));
+                                }
+                                Err(e) => {
+                                    let _ = events.send(AgentEvent::Error(format!(
+                                        "Failed to save brief: {e}"
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                    // Reset brief for the new session
+                    let title = guard.config.project.title.clone();
+                    guard.revision_brief = Some(
+                        crate::concepts::revision_brief::RevisionBrief::new(&title),
+                    );
+                }
                 session.clear();
                 let _ = events.send(AgentEvent::Response(
                     "Session cleared. Ready for a new conversation.".to_string(),
                 ));
+                let _ = events.send(AgentEvent::StateChanged);
                 let _ = events.send(AgentEvent::Idle);
             }
             GuiRequest::CompactContext => {
@@ -134,21 +211,71 @@ pub async fn agent_loop(
                 )));
                 let _ = events.send(AgentEvent::Idle);
             }
+            GuiRequest::CanvasTextChanged { file, text } => {
+                let mut guard = domain.lock().await;
+                let d = &mut *guard;
+
+                let save_result = if let Some(ref file_path) = file {
+                    // Multi-file: update in FileBufferManager
+                    if let Some(ref mut fbm) = d.file_buffer_manager {
+                        if let Some(entry) = fbm.get_entry_mut(file_path) {
+                            let current_len = entry.text_buffer.read_all().len();
+                            let range = crate::concepts::text_buffer::ByteRange::new(0, current_len);
+                            if let Err(e) = entry.text_buffer.replace(range, &text) {
+                                Err(format!("{e}"))
+                            } else {
+                                let new_text = entry.text_buffer.read_all();
+                                let parse_mode = if entry.format == "fountain" {
+                                    crate::concepts::scene_map::ParseMode::Fountain
+                                } else {
+                                    crate::concepts::scene_map::ParseMode::Prose
+                                };
+                                let mut sm = crate::concepts::scene_map::SceneMap::new(parse_mode);
+                                sm.full_reindex(&new_text, file_path);
+                                entry.scene_map = sm;
+                                entry.text_buffer.save().map_err(|e| format!("{e}"))
+                            }
+                        } else {
+                            Err(format!("File '{}' not found in manifest", file_path))
+                        }
+                    } else {
+                        Err("No file buffer manager".to_string())
+                    }
+                } else {
+                    // Single-file: update primary text buffer
+                    let current_len = d.text_buffer.read_all().len();
+                    let range = crate::concepts::text_buffer::ByteRange::new(0, current_len);
+                    if let Err(e) = d.text_buffer.replace(range, &text) {
+                        Err(format!("{e}"))
+                    } else {
+                        let full_text = d.text_buffer.read_all();
+                        d.scene_map.full_reindex(&full_text, "");
+                        d.text_buffer.save().map_err(|e| format!("{e}"))
+                    }
+                };
+
+                if let Err(e) = save_result {
+                    let _ = events.send(AgentEvent::Error(format!("Canvas save error: {e}")));
+                }
+                let _ = events.send(AgentEvent::StateChanged);
+            }
             GuiRequest::Chat(input) => {
                 let _ = events.send(AgentEvent::Thinking);
 
+                let system_prompt = system_prompt_for_mode(current_mode);
+                let skill_ctx = skill_context_for_mode(current_mode);
                 let prepared = {
                     let d = domain.lock().await;
                     session.prepare_chat_turn(ChatTurnRequest {
                         user_input: &input,
-                        system_prompt: SYSTEM_PROMPT,
+                        system_prompt: &system_prompt,
                         graph: &d.graph,
                         intent: &d.intent,
                         text_buffer: &d.text_buffer,
                         scene_map: &d.scene_map,
                         file_buffer_manager: d.file_buffer_manager.as_ref(),
                         skills: &skills,
-                        skill_context: SkillSetContext::Chat,
+                        skill_context: skill_ctx,
                     })
                 };
                 match session
@@ -469,6 +596,7 @@ async fn run_scan_single_buffer(
                 format: d.config.project.format.clone(),
                 order: 0,
                 content_hash,
+                editable: true,
             }],
             context_files: Vec::new(),
             excluded: Vec::new(),
@@ -520,6 +648,7 @@ async fn execute_gui_tool_calls(
                 perspectives: Some(&mut d.perspectives),
                 manifest: d.manifest.as_ref(),
                 project_root: Some(&d.project_root),
+                revision_brief: d.revision_brief.as_mut(),
             };
             skills
                 .invoke(&tc.name, &tc.arguments, &mut ctx, Some(provider))

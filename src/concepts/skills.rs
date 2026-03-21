@@ -1,3 +1,4 @@
+mod brief_tools;
 mod custom;
 mod canvas_tools;
 mod file_tools;
@@ -43,6 +44,7 @@ pub enum SkillCategory {
     PerspectiveTools,
     StructuralTools,
     CanvasTools,
+    BriefTools,
     CustomTools,
 }
 
@@ -57,6 +59,10 @@ pub enum SkillSetContext {
     /// Perspective mode: only PerspectiveTools and GraphTools.
     #[allow(dead_code)]
     Perspective,
+    /// Consultant mode: all read/analysis tools, NO canvas write tools.
+    Consultant,
+    /// Workshop mode: all tools including canvas writes.
+    Workshop,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,6 +98,7 @@ pub struct SkillContext<'a> {
     pub perspectives: Option<&'a mut CharacterPerspective>,
     pub manifest: Option<&'a Manifest>,
     pub project_root: Option<&'a Path>,
+    pub revision_brief: Option<&'a mut crate::concepts::revision_brief::RevisionBrief>,
 }
 
 pub struct Skills {
@@ -187,6 +194,10 @@ impl Skills {
             "write_to_canvas" => self.exec_write_to_canvas(args, ctx),
             "replace_in_canvas" => self.exec_replace_in_canvas(args, ctx),
             "insert_scene" => self.exec_insert_scene(args, ctx),
+
+            // Brief Tools (Consultant mode)
+            "add_to_brief" => self.exec_add_to_brief(args, ctx),
+            "generate_brief" => self.exec_generate_brief(args, ctx),
 
             _ => {
                 if self.custom_data.contains_key(skill_name) {
@@ -365,12 +376,14 @@ mod tests {
                     format: "prose".to_string(),
                     order: 1,
                     content_hash: "h1".to_string(),
+                    editable: true,
                 },
                 StoryFile {
                     path: "chapter-2.md".to_string(),
                     format: "prose".to_string(),
                     order: 2,
                     content_hash: "h2".to_string(),
+                    editable: true,
                 },
             ],
             context_files: vec![],
@@ -400,6 +413,7 @@ mod tests {
             perspectives: None,
             manifest: None,
             project_root: None,
+            revision_brief: None,
         };
 
         let result = skills
@@ -424,6 +438,7 @@ mod tests {
             perspectives: None,
             manifest: None,
             project_root: None,
+            revision_brief: None,
         };
 
         let result = skills
@@ -445,6 +460,7 @@ mod tests {
             perspectives: None,
             manifest: None,
             project_root: None,
+            revision_brief: None,
         };
 
         let result = skills
@@ -466,6 +482,7 @@ mod tests {
             perspectives: None,
             manifest: None,
             project_root: None,
+            revision_brief: None,
         };
 
         let result = skills
@@ -487,6 +504,7 @@ mod tests {
             perspectives: None,
             manifest: None,
             project_root: None,
+            revision_brief: None,
         };
 
         let result = skills
@@ -510,6 +528,7 @@ mod tests {
             perspectives: Some(&mut perspectives),
             manifest: None,
             project_root: None,
+            revision_brief: None,
         };
 
         let result = skills
@@ -536,6 +555,7 @@ mod tests {
             perspectives: None,
             manifest: None,
             project_root: None,
+            revision_brief: None,
         };
 
         let result = skills
@@ -570,6 +590,7 @@ mod tests {
             perspectives: None,
             manifest: None,
             project_root: None,
+            revision_brief: None,
         };
 
         let result = skills
@@ -602,6 +623,7 @@ mod tests {
             perspectives: None,
             manifest: None,
             project_root: None,
+            revision_brief: None,
         };
 
         let result = skills
@@ -634,6 +656,7 @@ mod tests {
             perspectives: None,
             manifest: None,
             project_root: None,
+            revision_brief: None,
         };
 
         let original_len = ctx.text_buffer.read_all().len();
@@ -667,6 +690,7 @@ mod tests {
             perspectives: None,
             manifest: None,
             project_root: None,
+            revision_brief: None,
         };
 
         let result = skills
@@ -698,6 +722,7 @@ mod tests {
             perspectives: None,
             manifest: None,
             project_root: None,
+            revision_brief: None,
         };
 
         let result = skills
@@ -737,6 +762,7 @@ mod tests {
             perspectives: None,
             manifest: None,
             project_root: None,
+            revision_brief: None,
         };
 
         let result = skills
@@ -781,6 +807,7 @@ mod tests {
             perspectives: None,
             manifest: None,
             project_root: None,
+            revision_brief: None,
         };
 
         let result = skills
@@ -822,6 +849,7 @@ mod tests {
             perspectives: None,
             manifest: None,
             project_root: None,
+            revision_brief: None,
         };
 
         let result = skills
@@ -886,6 +914,7 @@ mod tests {
                 format: "prose".to_string(),
                 order: 1,
                 content_hash: "abc".to_string(),
+                editable: true,
             }],
             context_files: vec![
                 crate::concepts::manifest::ContextFile {
@@ -915,6 +944,7 @@ mod tests {
             perspectives: None,
             manifest: Some(&manifest),
             project_root: None,
+            revision_brief: None,
         };
 
         let result = skills
@@ -951,6 +981,7 @@ mod tests {
             perspectives: None,
             manifest: None,
             project_root: None,
+            revision_brief: None,
         };
 
         let result = skills
@@ -990,6 +1021,7 @@ mod tests {
             perspectives: None,
             manifest: Some(&manifest),
             project_root: Some(root),
+            revision_brief: None,
         };
 
         // Look up by role
@@ -1033,6 +1065,7 @@ mod tests {
             perspectives: None,
             manifest: Some(&manifest),
             project_root: Some(root),
+            revision_brief: None,
         };
 
         // Look up by path
@@ -1071,6 +1104,7 @@ mod tests {
             perspectives: None,
             manifest: Some(&manifest),
             project_root: Some(std::path::Path::new("/tmp")),
+            revision_brief: None,
         };
 
         let result = skills
@@ -1302,6 +1336,7 @@ type = "object"
             perspectives: None,
             manifest: None,
             project_root: None,
+            revision_brief: None,
         };
 
         let result = skills

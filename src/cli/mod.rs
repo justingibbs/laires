@@ -1,4 +1,6 @@
+mod brief;
 mod chat;
+mod convert;
 pub(crate) mod diff;
 mod graph;
 pub(crate) mod init;
@@ -92,6 +94,19 @@ enum Commands {
         path: Option<std::path::PathBuf>,
     },
 
+    /// Show or list revision briefs
+    Brief {
+        /// List all saved briefs
+        #[arg(long)]
+        list: bool,
+    },
+
+    /// Convert a .docx or .txt file to editable .md
+    Convert {
+        /// File to convert (e.g. "novel.docx")
+        file: String,
+    },
+
     /// Generate character perspective analysis
     Perspective {
         /// Character name
@@ -142,6 +157,12 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         }
         Commands::Gui { path } => {
             crate::gui::run_gui(path).await?;
+        }
+        Commands::Brief { list } => {
+            brief::run(list)?;
+        }
+        Commands::Convert { file } => {
+            convert::run(&file)?;
         }
         Commands::Perspective {
             character,

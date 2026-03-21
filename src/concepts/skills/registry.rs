@@ -333,6 +333,58 @@ impl Skills {
                 "required": ["node_id", "field"]
             }),
         });
+
+        // Brief Tools (Consultant mode)
+        self.register(SkillDefinition {
+            name: "add_to_brief".to_string(),
+            description: "Record a specific revision suggestion in the revision brief. Use this in Consultant mode to build up a structured set of actionable revision notes for the writer.".to_string(),
+            category: SkillCategory::BriefTools,
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "scene_title": { "type": "string", "description": "Title of the scene this revision applies to" },
+                    "file": { "type": "string", "description": "File path this revision applies to" },
+                    "priority": { "type": "string", "enum": ["high", "medium", "low"], "description": "Revision priority. Default: medium" },
+                    "current_state": { "type": "string", "description": "Brief excerpt of the current text being revised" },
+                    "issue": { "type": "string", "description": "What the analysis found — the problem or opportunity" },
+                    "suggestion": { "type": "string", "description": "Specific, actionable instruction for the revision" },
+                    "draft": { "type": "string", "description": "Optional draft passage the writer can adapt" },
+                    "graph_impact": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "How this revision affects the narrative graph (e.g. 'New conflict edge: Sarah <-> Marcus')"
+                    }
+                },
+                "required": ["issue", "suggestion"]
+            }),
+        });
+
+        self.register(SkillDefinition {
+            name: "generate_brief".to_string(),
+            description: "Finalize and export the revision brief as a Markdown document. Call this after adding revisions with add_to_brief.".to_string(),
+            category: SkillCategory::BriefTools,
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "focus": { "type": "string", "description": "What this brief addresses (e.g. 'Character arc for Sarah')" },
+                    "scope": { "type": "string", "description": "Scene range or 'full manuscript'" },
+                    "overview": { "type": "string", "description": "2-3 sentence summary of the revision brief" },
+                    "structural_notes": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "category": { "type": "string", "description": "Category (e.g. Pacing, Timeline, Arc completeness)" },
+                                "note": { "type": "string", "description": "The structural observation" }
+                            },
+                            "required": ["category", "note"]
+                        },
+                        "description": "Broader structural observations that don't map to a single scene"
+                    }
+                },
+                "required": ["focus", "overview"]
+            }),
+        });
     }
 
     pub fn register(&mut self, skill: SkillDefinition) {
@@ -358,13 +410,23 @@ impl Skills {
         &self,
         context: SkillSetContext,
     ) -> Vec<crate::concepts::provider::ToolSchema> {
-        let allowed_categories: Option<Vec<SkillCategory>> = match context {
-            SkillSetContext::Chat => None,
-            SkillSetContext::Analysis => Some(vec![]),
-            SkillSetContext::Perspective => Some(vec![
-                SkillCategory::PerspectiveTools,
-                SkillCategory::GraphTools,
-            ]),
+        // Determine which categories are allowed (None = all)
+        // and which are explicitly excluded.
+        let (allowed_categories, excluded_categories): (
+            Option<Vec<SkillCategory>>,
+            Vec<SkillCategory>,
+        ) = match context {
+            SkillSetContext::Chat | SkillSetContext::Workshop => (None, vec![]),
+            SkillSetContext::Analysis => (Some(vec![]), vec![]),
+            SkillSetContext::Perspective => (
+                Some(vec![
+                    SkillCategory::PerspectiveTools,
+                    SkillCategory::GraphTools,
+                ]),
+                vec![],
+            ),
+            // Consultant: everything EXCEPT canvas write tools
+            SkillSetContext::Consultant => (None, vec![SkillCategory::CanvasTools]),
         };
 
         self.registry
@@ -374,6 +436,7 @@ impl Skills {
                 None => true,
                 Some(cats) => cats.contains(&s.category),
             })
+            .filter(|s| !excluded_categories.contains(&s.category))
             .map(|s| crate::concepts::provider::ToolSchema {
                 name: s.name.clone(),
                 description: s.description.clone(),

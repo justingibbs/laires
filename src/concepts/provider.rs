@@ -826,6 +826,7 @@ mod tests {
             project: ProjectMeta {
                 title: "Test".to_string(),
                 format: "prose".to_string(),
+                default_mode: None,
             },
             analysis: AnalysisConfig::default(),
             privacy: PrivacyConfig::default(),
@@ -868,6 +869,7 @@ mod tests {
             project: ProjectMeta {
                 title: "Test".to_string(),
                 format: "prose".to_string(),
+                default_mode: None,
             },
             analysis: AnalysisConfig::default(),
             privacy: PrivacyConfig::default(),
@@ -896,6 +898,7 @@ mod tests {
             project: ProjectMeta {
                 title: "Test".to_string(),
                 format: "prose".to_string(),
+                default_mode: None,
             },
             analysis: AnalysisConfig::default(),
             privacy: PrivacyConfig::default(),

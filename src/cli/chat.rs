@@ -237,6 +237,7 @@ async fn execute_chat_tool_calls(
             perspectives: Some(runtime.perspectives),
             manifest: runtime.manifest,
             project_root: Some(runtime.project_root),
+            revision_brief: None,
         };
 
         let result = skills

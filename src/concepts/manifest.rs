@@ -32,6 +32,22 @@ pub struct StoryFile {
     pub format: String, // "prose" or "fountain"
     pub order: usize,
     pub content_hash: String,
+    /// Whether the agent can write to this file (Workshop mode).
+    /// Defaults to true for `.md` and `.fountain`, false for `.docx` and `.txt`.
+    #[serde(default = "default_editable")]
+    pub editable: bool,
+}
+
+fn default_editable() -> bool {
+    true
+}
+
+impl StoryFile {
+    /// Infer editability from file extension.
+    pub fn infer_editable(path: &str) -> bool {
+        let lower = path.to_lowercase();
+        lower.ends_with(".md") || lower.ends_with(".fountain")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -455,6 +471,7 @@ pub fn build_manifest_from_classification(
                 .get(sf.path.as_str())
                 .unwrap_or(&"")
                 .to_string(),
+            editable: StoryFile::infer_editable(&sf.path),
         })
         .collect();
 
@@ -558,6 +575,7 @@ mod tests {
                 format: "prose".to_string(),
                 order: 1,
                 content_hash: "abc123".to_string(),
+                editable: true,
             }],
             context_files: vec![ContextFile {
                 path: "characters.md".to_string(),
@@ -596,6 +614,7 @@ mod tests {
                 format: "prose".to_string(),
                 order: 1,
                 content_hash: "hash1".to_string(),
+                editable: true,
             }],
             context_files: vec![],
             excluded: vec![],
@@ -638,6 +657,7 @@ mod tests {
                 format: "prose".to_string(),
                 order: 1,
                 content_hash: "old_hash".to_string(),
+                editable: true,
             }],
             context_files: vec![],
             excluded: vec![],
@@ -671,12 +691,14 @@ mod tests {
                     format: "prose".to_string(),
                     order: 1,
                     content_hash: "hash1".to_string(),
+                    editable: true,
                 },
                 StoryFile {
                     path: "chapter-2.md".to_string(),
                     format: "prose".to_string(),
                     order: 2,
                     content_hash: "hash2".to_string(),
+                    editable: true,
                 },
             ],
             context_files: vec![],

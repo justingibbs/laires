@@ -10,6 +10,7 @@ pub const PERSPECTIVES_CACHE_DIR: &str = "cache/perspectives";
 pub const CHAT_HISTORY_FILE: &str = "chat_history.json";
 pub const MANIFEST_FILE: &str = "manifest.toml";
 pub const SKILL_LOG_FILE: &str = "skill_log.jsonl";
+pub const BRIEFS_DIR: &str = "briefs";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
@@ -38,6 +39,10 @@ pub struct ProjectMeta {
     pub title: String,
     #[serde(default = "default_format")]
     pub format: String,
+    /// Default session mode: "consultant" or "workshop".
+    /// If unset, inferred from file types in the manifest.
+    #[serde(default)]
+    pub default_mode: Option<String>,
 }
 
 fn default_format() -> String {
@@ -122,6 +127,7 @@ impl ProjectConfig {
             project: ProjectMeta {
                 title: title.to_string(),
                 format: "prose".to_string(),
+                default_mode: None,
             },
             analysis: AnalysisConfig::default(),
             privacy: PrivacyConfig::default(),

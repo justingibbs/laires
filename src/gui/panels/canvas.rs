@@ -1,6 +1,6 @@
 use eframe::egui::{self, Color32, CornerRadius, FontFamily, FontId, RichText, Vec2};
 
-use crate::gui::state::GuiState;
+use crate::gui::state::{GuiState, SessionMode};
 use crate::gui::theme::{LairesTheme, PROSE_FONT};
 use crate::gui::ProjectSnapshot;
 
@@ -61,9 +61,22 @@ pub fn render(
             (&snap.story_text, &snap.scene_boundary_lines, state.word_count)
         };
 
-    // Wrap entire canvas in a card frame
+    // Sync canvas edit buffer when file selection changes or buffer is empty
+    let edit_file_matches = state.canvas_edit_file == state.selected_file;
+    if !edit_file_matches || (state.canvas_edit_text.is_empty() && !display_text.is_empty()) {
+        if !state.canvas_dirty {
+            state.canvas_edit_text = display_text.clone();
+            state.canvas_edit_file = state.selected_file.clone();
+        }
+    }
+
+    // Wrap entire canvas in a card frame — fill all available space.
+    // Frame overhead: outer_margin(4*2) + inner_margin(16*2) + stroke(1*2) + shadow(~4)
+    let frame_overhead = 46.0;
+    let target_inner_h = (ui.available_height() - frame_overhead).max(0.0);
     theme.card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
+        ui.set_min_height(target_inner_h);
 
         // === File tabs (only when multiple files) ===
         if snap.file_texts.len() > 1 {
@@ -83,20 +96,52 @@ pub fn render(
         ui.add_space(14.0);
 
         // === Prose content ===
-        egui::ScrollArea::vertical()
-            .id_salt("canvas_scroll")
-            .auto_shrink([false; 2])
-            .show(ui, |ui| {
-                // Extra horizontal padding for a manuscript feel
-                ui.horizontal(|ui| {
-                    ui.add_space(16.0);
-                    ui.vertical(|ui| {
-                        ui.set_max_width((ui.available_width() - 16.0).max(0.0));
-                        render_prose(ui, display_text, display_boundaries, theme);
+        if state.session_mode == SessionMode::Workshop {
+            render_editable(ui, state, theme);
+        } else {
+            egui::ScrollArea::vertical()
+                .id_salt("canvas_scroll")
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                    // Extra horizontal padding for a manuscript feel
+                    ui.horizontal(|ui| {
+                        ui.add_space(16.0);
+                        ui.vertical(|ui| {
+                            ui.set_max_width((ui.available_width() - 16.0).max(0.0));
+                            render_prose(ui, display_text, display_boundaries, theme);
+                        });
                     });
                 });
-            });
+        }
     });
+}
+
+/// Renders the canvas as an editable TextEdit in Workshop mode.
+fn render_editable(ui: &mut egui::Ui, state: &mut GuiState, theme: &LairesTheme) {
+    egui::ScrollArea::vertical()
+        .id_salt("canvas_edit_scroll")
+        .auto_shrink([false; 2])
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.add_space(16.0);
+                ui.vertical(|ui| {
+                    let max_w = (ui.available_width() - 16.0).max(200.0);
+                    ui.set_max_width(max_w);
+
+                    let response = egui::TextEdit::multiline(&mut state.canvas_edit_text)
+                        .font(prose_font(16.0))
+                        .text_color(theme.prose_color)
+                        .desired_width(max_w)
+                        .frame(false)
+                        .margin(egui::Margin::ZERO)
+                        .show(ui);
+
+                    if response.response.changed() {
+                        state.canvas_dirty = true;
+                    }
+                });
+            });
+        });
 }
 
 /// Renders clickable file tabs when multiple story files exist.

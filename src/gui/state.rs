@@ -1,5 +1,25 @@
 use crate::config::ProjectConfig;
 
+/// The two operating modes for a Laires session.
+///
+/// - **Consultant**: Read-only analysis. The agent never modifies files.
+///   Canvas write tools are disabled. Output is structured as a revision brief.
+/// - **Workshop**: Live editing of `.md` and `.fountain` files via canvas tools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SessionMode {
+    Consultant,
+    Workshop,
+}
+
+impl std::fmt::Display for SessionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SessionMode::Consultant => write!(f, "Consultant"),
+            SessionMode::Workshop => write!(f, "Workshop"),
+        }
+    }
+}
+
 /// Messages from agent -> GUI
 pub enum AgentEvent {
     Thinking,
@@ -25,6 +45,12 @@ pub enum GuiRequest {
     TestConnection,
     NewSession,
     CompactContext,
+    SwitchMode(SessionMode),
+    /// Direct canvas edit: the user typed in the canvas (Workshop mode).
+    CanvasTextChanged {
+        file: Option<String>,
+        text: String,
+    },
 }
 
 /// Which screen the GUI is displaying.
@@ -38,6 +64,7 @@ pub enum AppMode {
 pub struct GuiState {
     // App mode
     pub app_mode: AppMode,
+    pub session_mode: SessionMode,
     pub project_title: String,
 
     // Layout
@@ -56,6 +83,12 @@ pub struct GuiState {
     // Canvas
     pub selected_scene_id: Option<String>,
     pub selected_file: Option<String>,
+    /// Live editable text for the canvas (Workshop mode).
+    pub canvas_edit_text: String,
+    /// Which file the canvas_edit_text belongs to (None = primary buffer).
+    pub canvas_edit_file: Option<String>,
+    /// Whether the canvas edit text has been modified since last sync.
+    pub canvas_dirty: bool,
 
     // Analysis sidebar — entity highlight toggles
     pub highlight_characters: bool,
@@ -93,6 +126,7 @@ pub enum RightTab {
     Dashboard,
     Canvas,
     Graph,
+    Brief,
     Lint,
     Pacing,
 }
@@ -136,6 +170,7 @@ impl Default for GuiState {
     fn default() -> Self {
         Self {
             app_mode: AppMode::Welcome,
+            session_mode: SessionMode::Consultant,
             project_title: String::new(),
             active_right_tab: RightTab::Dashboard,
             sidebar_visible: true,
@@ -150,6 +185,9 @@ impl Default for GuiState {
             graph_needs_rebuild: true,
             selected_scene_id: None,
             selected_file: None,
+            canvas_edit_text: String::new(),
+            canvas_edit_file: None,
+            canvas_dirty: false,
             highlight_characters: true,
             highlight_locations: true,
             highlight_objects: false,

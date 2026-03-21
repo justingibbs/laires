@@ -17,9 +17,30 @@ use crate::config::{self, ProjectConfig, LAIRES_DIR};
 use crate::runtime::project_loader::{load_project, LoadedProject, ProjectLoadResult};
 use crate::runtime::story_access::StoryAccess;
 
-use state::{AgentEvent, AgentStatus, AppMode, ChatMessage, ChatRole, GuiRequest, GuiState, RightTab, ToolCallDisplay};
+use state::{AgentEvent, AgentStatus, AppMode, ChatMessage, ChatRole, GuiRequest, GuiState, RightTab, SessionMode, ToolCallDisplay};
 use theme::LairesTheme;
 use welcome::{RecentProjects, WelcomeAction};
+
+/// Infer the default session mode from project config and manifest.
+///
+/// Priority: explicit config > manifest heuristic (all editable = Workshop, else Consultant).
+fn infer_session_mode(config: &ProjectConfig, manifest: Option<&crate::concepts::manifest::Manifest>) -> SessionMode {
+    // Check explicit config
+    if let Some(ref mode_str) = config.project.default_mode {
+        match mode_str.to_lowercase().as_str() {
+            "workshop" => return SessionMode::Workshop,
+            "consultant" => return SessionMode::Consultant,
+            _ => {} // fall through to inference
+        }
+    }
+    // Infer from manifest: if all story files are editable, default Workshop
+    if let Some(m) = manifest {
+        if !m.story_files.is_empty() && m.story_files.iter().all(|f| f.editable) {
+            return SessionMode::Workshop;
+        }
+    }
+    SessionMode::Consultant
+}
 
 /// Loaded project data — shared between GUI and agent via Arc<Mutex<>>.
 pub(crate) struct ProjectData {
@@ -32,6 +53,8 @@ pub(crate) struct ProjectData {
     pub file_buffer_manager: Option<crate::concepts::file_buffer_manager::FileBufferManager>,
     pub project_root: PathBuf,
     pub config: ProjectConfig,
+    /// Accumulated revision brief for Consultant mode.
+    pub revision_brief: Option<crate::concepts::revision_brief::RevisionBrief>,
 }
 
 /// State for the "New Project" dialog.
@@ -75,6 +98,8 @@ struct GuiApp {
     gui_rx: Option<std::sync::mpsc::Receiver<AgentEvent>>,
     /// Accumulator for current assistant message being built from tool calls.
     pending_tool_calls: Vec<ToolCallDisplay>,
+    /// Timestamp of last canvas edit (for debounced save).
+    canvas_last_edit: Option<std::time::Instant>,
 
     // --- Project picker state ---
     recent_projects: RecentProjects,
@@ -109,6 +134,9 @@ pub(crate) struct ProjectSnapshot {
     context_files: Vec<String>,
     graph_nodes: Vec<panels::graph_view::GraphNodeInfo>,
     graph_edges: Vec<panels::graph_view::GraphEdgeInfo>,
+    /// Brief revision count and rendered markdown (for Brief panel).
+    brief_revision_count: usize,
+    brief_markdown: String,
 }
 
 impl GuiApp {
@@ -139,6 +167,7 @@ impl GuiApp {
             gui_tx,
             gui_rx,
             pending_tool_calls: Vec::new(),
+            canvas_last_edit: None,
             recent_projects,
             runtime_handle,
             pending_project_path: None,
@@ -246,6 +275,23 @@ impl GuiApp {
                 }
             }
         }
+    }
+
+    /// Flush dirty canvas edits to the agent loop (debounced: 1s after last keystroke).
+    fn flush_canvas_edits(&mut self) {
+        let Some(last) = self.canvas_last_edit else {
+            return;
+        };
+        if last.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        if let Some(tx) = &self.gui_tx {
+            let _ = tx.send(GuiRequest::CanvasTextChanged {
+                file: self.gui_state.canvas_edit_file.clone(),
+                text: self.gui_state.canvas_edit_text.clone(),
+            });
+        }
+        self.canvas_last_edit = None;
     }
 
     fn send_chat(&mut self) {
@@ -639,6 +685,7 @@ impl GuiApp {
                 let skills = load_result.skills;
                 let summary = load_result.summary;
                 let title = data.config.project.title.clone();
+                let mode = infer_session_mode(&data.config, data.manifest.as_ref());
                 let domain = Arc::new(Mutex::new(data));
 
                 // Create new channels
@@ -649,7 +696,7 @@ impl GuiApp {
                 // Spawn new agent
                 let agent_domain = domain.clone();
                 self.runtime_handle.spawn(async move {
-                    agent::agent_loop(agent_domain, rx_from_gui, tx_to_gui, provider, skills).await;
+                    agent::agent_loop(agent_domain, rx_from_gui, tx_to_gui, provider, skills, mode).await;
                 });
 
                 self.domain = Some(domain);
@@ -667,6 +714,7 @@ impl GuiApp {
                 let ctx_window_max = state::context_window_for_model(&summary.model_name);
                 self.gui_state = GuiState {
                     app_mode: AppMode::Project,
+                    session_mode: mode,
                     project_title: title.clone(),
                     privacy_label: summary.privacy_label,
                     model_name: summary.model_name,
@@ -880,7 +928,7 @@ impl GuiApp {
                     .inner_margin(egui::Margin::same(12)),
             )
             .show(ctx, |ui| {
-                // Tab bar
+                // Tab bar (mode-aware)
                 ui.horizontal(|ui| {
                     ui.selectable_value(
                         &mut self.gui_state.active_right_tab,
@@ -897,16 +945,38 @@ impl GuiApp {
                         RightTab::Graph,
                         "Graph",
                     );
-                    ui.selectable_value(
-                        &mut self.gui_state.active_right_tab,
-                        RightTab::Lint,
-                        "Lint",
-                    );
-                    ui.selectable_value(
-                        &mut self.gui_state.active_right_tab,
-                        RightTab::Pacing,
-                        "Pacing",
-                    );
+
+                    // Consultant mode: show Brief tab
+                    if self.gui_state.session_mode == SessionMode::Consultant {
+                        let brief_label = if let Some(snap) = &self.snapshot {
+                            if snap.brief_revision_count > 0 {
+                                format!("Brief ({})", snap.brief_revision_count)
+                            } else {
+                                "Brief".to_string()
+                            }
+                        } else {
+                            "Brief".to_string()
+                        };
+                        ui.selectable_value(
+                            &mut self.gui_state.active_right_tab,
+                            RightTab::Brief,
+                            brief_label,
+                        );
+                    }
+
+                    // Workshop mode: show Lint and Pacing tabs
+                    if self.gui_state.session_mode == SessionMode::Workshop {
+                        ui.selectable_value(
+                            &mut self.gui_state.active_right_tab,
+                            RightTab::Lint,
+                            "Lint",
+                        );
+                        ui.selectable_value(
+                            &mut self.gui_state.active_right_tab,
+                            RightTab::Pacing,
+                            "Pacing",
+                        );
+                    }
                 });
                 ui.separator();
 
@@ -924,10 +994,13 @@ impl GuiApp {
                             // Split: canvas on left, analysis sidebar on right
                             let sidebar_w = panels::analysis_sidebar::SIDEBAR_WIDTH;
                             let canvas_w = (ui.available_width() - sidebar_w - 12.0).max(200.0);
+                            // Capture available height before entering horizontal layout,
+                            // because ui.horizontal() doesn't propagate parent height.
+                            let avail_h = ui.available_height();
 
                             ui.horizontal(|ui| {
                                 ui.allocate_ui_with_layout(
-                                    egui::vec2(canvas_w, ui.available_height()),
+                                    egui::vec2(canvas_w, avail_h),
                                     egui::Layout::top_down(egui::Align::LEFT),
                                     |ui| {
                                         panels::canvas::render(
@@ -943,7 +1016,7 @@ impl GuiApp {
 
                                 // Analysis sidebar in a card frame
                                 ui.allocate_ui_with_layout(
-                                    egui::vec2(sidebar_w, ui.available_height()),
+                                    egui::vec2(sidebar_w, avail_h),
                                     egui::Layout::top_down(egui::Align::LEFT),
                                     |ui| {
                                         self.theme.card_frame().show(ui, |ui| {
@@ -972,6 +1045,14 @@ impl GuiApp {
                             &mut self.gui_state,
                             &self.snapshot,
                             &mut self.graph_layout,
+                            &self.theme,
+                        );
+                    }
+                    RightTab::Brief => {
+                        panels::brief::render(
+                            ui,
+                            &self.gui_state,
+                            &self.snapshot,
                             &self.theme,
                         );
                     }
@@ -1017,8 +1098,40 @@ impl eframe::App for GuiApp {
             self.open_settings_dialog();
         }
 
+        // Handle mode switch from status bar badge (via ctx memory bool flag)
+        let mode_switch_requested = ctx.memory_mut(|mem| {
+            mem.data.get_temp::<bool>(egui::Id::new("switch_mode")).unwrap_or(false)
+        });
+        if mode_switch_requested {
+            ctx.memory_mut(|mem| mem.data.insert_temp(egui::Id::new("switch_mode"), false));
+            let new_mode = match self.gui_state.session_mode {
+                SessionMode::Consultant => SessionMode::Workshop,
+                SessionMode::Workshop => SessionMode::Consultant,
+            };
+            self.gui_state.session_mode = new_mode;
+            // Notify agent of mode change
+            if let Some(tx) = &self.gui_tx {
+                let _ = tx.send(GuiRequest::SwitchMode(new_mode));
+            }
+            // Add system message to chat
+            self.gui_state.chat_history.push(state::ChatMessage {
+                role: state::ChatRole::System,
+                content: format!("Switched to **{}** mode.", new_mode),
+                tool_calls: Vec::new(),
+            });
+        }
+
         // Poll agent events (only meaningful when in Project mode)
         self.process_agent_events();
+
+        // Track canvas dirty timestamp and flush debounced edits.
+        // canvas_dirty is set each frame the TextEdit reports a change.
+        // We consume it here and (re)start the debounce timer.
+        if self.gui_state.canvas_dirty {
+            self.canvas_last_edit = Some(std::time::Instant::now());
+            self.gui_state.canvas_dirty = false;
+        }
+        self.flush_canvas_edits();
 
         // Handle keyboard shortcuts
         self.handle_shortcuts(ctx);
@@ -1199,10 +1312,22 @@ fn build_snapshot(proj: &ProjectData) -> ProjectSnapshot {
         context_files,
         graph_nodes,
         graph_edges,
+        brief_revision_count: proj
+            .revision_brief
+            .as_ref()
+            .map(|b| b.revision_count())
+            .unwrap_or(0),
+        brief_markdown: proj
+            .revision_brief
+            .as_ref()
+            .filter(|b| !b.is_empty())
+            .map(|b| b.to_markdown())
+            .unwrap_or_default(),
     }
 }
 
 fn into_gui_project_data(project: LoadedProject) -> ProjectData {
+    let title = project.config.project.title.clone();
     ProjectData {
         text_buffer: project.text_buffer,
         scene_map: project.scene_map,
@@ -1213,6 +1338,7 @@ fn into_gui_project_data(project: LoadedProject) -> ProjectData {
         file_buffer_manager: project.file_buffer_manager,
         project_root: project.project_root,
         config: project.config,
+        revision_brief: Some(crate::concepts::revision_brief::RevisionBrief::new(&title)),
     }
 }
 
@@ -1249,8 +1375,10 @@ pub async fn run_gui(project_path: Option<PathBuf>) -> anyhow::Result<()> {
                 let skills = load_result.skills;
                 let summary = load_result.summary;
                 let title = data.config.project.title.clone();
+                let mode = infer_session_mode(&data.config, data.manifest.as_ref());
                 let mut gs = GuiState::default();
                 gs.app_mode = AppMode::Project;
+                gs.session_mode = mode;
                 gs.project_title = title.clone();
                 gs.privacy_label = summary.privacy_label;
                 gs.model_name = summary.model_name.clone();
@@ -1274,7 +1402,7 @@ pub async fn run_gui(project_path: Option<PathBuf>) -> anyhow::Result<()> {
                 // Spawn agent on the current tokio runtime
                 let agent_domain = domain.clone();
                 tokio::spawn(async move {
-                    agent::agent_loop(agent_domain, rx_from_gui, tx_to_gui, provider, skills).await;
+                    agent::agent_loop(agent_domain, rx_from_gui, tx_to_gui, provider, skills, mode).await;
                 });
 
                 // Update recents

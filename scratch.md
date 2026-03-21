@@ -17,7 +17,16 @@ Scan the folder:
 laires scan
 
 ---
+# Branchs
+- phase-3
+- phase-4
+- refactor-codex
+- dual-mode
+- gui-refresh
 
+
+
+---
 need to check on LLM language part of the app.
 
 ---
