@@ -12,10 +12,14 @@ pub fn render(
     snapshot: &Option<ProjectSnapshot>,
     theme: &LairesTheme,
 ) {
+    let max_w = ui.available_width();
+    ui.set_max_width(max_w);
+
     egui::ScrollArea::vertical()
         .id_salt("dashboard_scroll")
-        .auto_shrink([false; 2])
+        .auto_shrink([false, true])
         .show(ui, |ui| {
+            ui.set_max_width(max_w);
             let Some(snap) = snapshot else {
                 ui.centered_and_justified(|ui| {
                     ui.label(
@@ -28,24 +32,37 @@ pub fn render(
                 return;
             };
 
-            // === Top row: Graph + Story Overview side by side ===
+            // === Top row: Graph + Story Overview ===
             let available_w = ui.available_width();
-            let graph_w = (available_w * 0.58).max(300.0);
-            let overview_w = available_w - graph_w - 12.0;
+            let stack_vertical = available_w < 600.0;
 
-            ui.horizontal(|ui| {
-                // Left: Narrative Graph card
-                ui.allocate_ui(Vec2::new(graph_w, 360.0), |ui| {
-                    render_graph_card(ui, snap, theme);
+            if stack_vertical {
+                // Narrow: stack vertically
+                render_graph_card(ui, snap, theme);
+                ui.add_space(8.0);
+                render_overview_card(ui, state, snap, theme);
+            } else {
+                // Wide: side by side
+                let graph_w = available_w * 0.58;
+                let overview_w = available_w - graph_w - 12.0;
+                let row_h = ui.available_height().min(360.0).max(200.0);
+
+                ui.horizontal(|ui| {
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(graph_w, row_h),
+                        egui::Layout::top_down(egui::Align::LEFT),
+                        |ui| { render_graph_card(ui, snap, theme); },
+                    );
+
+                    ui.add_space(4.0);
+
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(overview_w, row_h),
+                        egui::Layout::top_down(egui::Align::LEFT),
+                        |ui| { render_overview_card(ui, state, snap, theme); },
+                    );
                 });
-
-                ui.add_space(4.0);
-
-                // Right: Story Overview card
-                ui.allocate_ui(Vec2::new(overview_w, 360.0), |ui| {
-                    render_overview_card(ui, state, snap, theme);
-                });
-            });
+            }
 
             ui.add_space(8.0);
 
@@ -62,24 +79,22 @@ fn render_graph_card(
     theme: &LairesTheme,
 ) {
     theme.card_frame().show(ui, |ui| {
-        ui.set_min_size(ui.available_size());
+        let w = ui.available_width();
+        ui.set_min_width(w);
+        ui.set_max_width(w);
 
         // Header
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("\u{25C9} Narrative Graph")
-                    .color(theme.text_primary)
-                    .size(14.0)
-                    .strong(),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    RichText::new("Switch to Graph tab for full view")
-                        .color(theme.text_secondary)
-                        .size(10.0),
-                );
-            });
-        });
+        ui.label(
+            RichText::new("\u{25C9} Narrative Graph")
+                .color(theme.text_primary)
+                .size(14.0)
+                .strong(),
+        );
+        ui.label(
+            RichText::new("Switch to Graph tab for full view")
+                .color(theme.text_secondary)
+                .size(10.0),
+        );
         ui.add_space(12.0);
 
         if snap.graph_nodes.is_empty() {
@@ -131,18 +146,16 @@ fn render_graph_card(
                     ui.painter().circle_filled(dot_rect.center(), 5.0, *color);
 
                     ui.label(
-                        RichText::new(*label)
+                        RichText::new(format!("{label}  "))
                             .color(theme.text_primary)
                             .size(12.0),
                     );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            RichText::new(count.to_string())
-                                .color(*color)
-                                .size(12.0)
-                                .strong(),
-                        );
-                    });
+                    ui.label(
+                        RichText::new(count.to_string())
+                            .color(*color)
+                            .size(12.0)
+                            .strong(),
+                    );
                 });
 
                 // Bar
@@ -188,7 +201,9 @@ fn render_overview_card(
     theme: &LairesTheme,
 ) {
     theme.card_frame().show(ui, |ui| {
-        ui.set_min_size(ui.available_size());
+        let w = ui.available_width();
+        ui.set_min_width(w);
+        ui.set_max_width(w);
 
         ui.label(
             RichText::new("\u{2606} Story Overview")
@@ -212,7 +227,11 @@ fn render_overview_card(
 
         // Row 2: Scenes + Analysis %
         let total_scenes = state.scene_count;
-        let analyzed = count_by_type(&snap.graph_nodes, "scene");
+        // If the graph has any scene nodes, all scenes were analyzed during scan.
+        // Use total_scenes as the cap since graph "scene" nodes can outnumber
+        // actual parsed scenes (acts, parts, sub-headings all become scene nodes).
+        let has_analysis = count_by_type(&snap.graph_nodes, "scene") > 0;
+        let analyzed = if has_analysis { total_scenes } else { 0 };
         let pct = if total_scenes > 0 {
             (analyzed as f32 / total_scenes as f32 * 100.0) as usize
         } else {
@@ -363,42 +382,54 @@ fn render_insight_callout(
 
 /// Quick Insights row — Character Arcs, Pacing, Conflict Density.
 fn render_insights_row(ui: &mut egui::Ui, snap: &ProjectSnapshot, theme: &LairesTheme) {
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new("\u{2726} Quick Insights")
-                .color(theme.text_primary)
-                .size(14.0)
-                .strong(),
-        );
-    });
+    ui.label(
+        RichText::new("\u{2726} Quick Insights")
+            .color(theme.text_primary)
+            .size(14.0)
+            .strong(),
+    );
     ui.add_space(8.0);
 
-    let card_w = (ui.available_width() - 16.0).max(0.0) / 3.0;
+    let available_w = ui.available_width();
+    let stack_vertical = available_w < 600.0;
 
-    ui.horizontal(|ui| {
-        // Character Arcs
-        ui.allocate_ui(Vec2::new(card_w, 160.0), |ui| {
-            render_character_arcs_card(ui, snap, theme);
-        });
+    if stack_vertical {
+        // Narrow: stack vertically
+        render_character_arcs_card(ui, snap, theme);
         ui.add_space(4.0);
-
-        // Pacing
-        ui.allocate_ui(Vec2::new(card_w, 160.0), |ui| {
-            render_pacing_card(ui, snap, theme);
-        });
+        render_pacing_card(ui, snap, theme);
         ui.add_space(4.0);
-
-        // Conflict Density
-        ui.allocate_ui(Vec2::new(card_w, 160.0), |ui| {
-            render_conflicts_card(ui, snap, theme);
+        render_conflicts_card(ui, snap, theme);
+    } else {
+        let card_w = (available_w - 16.0) / 3.0;
+        ui.horizontal(|ui| {
+            ui.allocate_ui_with_layout(
+                Vec2::new(card_w, 160.0),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| { render_character_arcs_card(ui, snap, theme); },
+            );
+            ui.add_space(4.0);
+            ui.allocate_ui_with_layout(
+                Vec2::new(card_w, 160.0),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| { render_pacing_card(ui, snap, theme); },
+            );
+            ui.add_space(4.0);
+            ui.allocate_ui_with_layout(
+                Vec2::new(card_w, 160.0),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| { render_conflicts_card(ui, snap, theme); },
+            );
         });
-    });
+    }
 }
 
 /// Character Arcs insight card.
 fn render_character_arcs_card(ui: &mut egui::Ui, snap: &ProjectSnapshot, theme: &LairesTheme) {
     theme.card_frame().show(ui, |ui| {
-        ui.set_min_width(ui.available_width());
+        let w = ui.available_width();
+        ui.set_min_width(w);
+        ui.set_max_width(w);
         ui.label(
             RichText::new("Character Arcs")
                 .color(theme.text_primary)
@@ -422,6 +453,11 @@ fn render_character_arcs_card(ui: &mut egui::Ui, snap: &ProjectSnapshot, theme: 
             );
         } else {
             for (i, ch) in characters.iter().take(5).enumerate() {
+                let connections = snap
+                    .graph_edges
+                    .iter()
+                    .filter(|e| e.source == ch.id || e.target == ch.id)
+                    .count();
                 ui.horizontal(|ui| {
                     // Colored dot
                     let (rect, _) = ui.allocate_exact_size(Vec2::splat(8.0), egui::Sense::hover());
@@ -432,20 +468,11 @@ fn render_character_arcs_card(ui: &mut egui::Ui, snap: &ProjectSnapshot, theme: 
                             .color(theme.text_primary)
                             .size(12.0),
                     );
-
-                    // Connection count as a simple strength proxy
-                    let connections = snap
-                        .graph_edges
-                        .iter()
-                        .filter(|e| e.source == ch.id || e.target == ch.id)
-                        .count();
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            RichText::new(format!("{} links", connections))
-                                .color(theme.text_secondary)
-                                .size(10.0),
-                        );
-                    });
+                    ui.label(
+                        RichText::new(format!("({} links)", connections))
+                            .color(theme.text_secondary)
+                            .size(10.0),
+                    );
                 });
                 if i < characters.len().min(5) - 1 {
                     ui.add_space(2.0);
@@ -458,7 +485,9 @@ fn render_character_arcs_card(ui: &mut egui::Ui, snap: &ProjectSnapshot, theme: 
 /// Pacing insight card with simple bar chart.
 fn render_pacing_card(ui: &mut egui::Ui, snap: &ProjectSnapshot, theme: &LairesTheme) {
     theme.card_frame().show(ui, |ui| {
-        ui.set_min_width(ui.available_width());
+        let w = ui.available_width();
+        ui.set_min_width(w);
+        ui.set_max_width(w);
         ui.label(
             RichText::new("Pacing Analysis")
                 .color(theme.text_primary)
@@ -540,7 +569,9 @@ fn render_pacing_card(ui: &mut egui::Ui, snap: &ProjectSnapshot, theme: &LairesT
 /// Conflict Density insight card.
 fn render_conflicts_card(ui: &mut egui::Ui, snap: &ProjectSnapshot, theme: &LairesTheme) {
     theme.card_frame().show(ui, |ui| {
-        ui.set_min_width(ui.available_width());
+        let w = ui.available_width();
+        ui.set_min_width(w);
+        ui.set_max_width(w);
         ui.label(
             RichText::new("Conflict Density")
                 .color(theme.text_primary)
@@ -609,14 +640,12 @@ fn render_density_row(
                 .color(theme.text_primary)
                 .size(11.0),
         );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(
-                RichText::new(count.to_string())
-                    .color(color)
-                    .size(11.0)
-                    .strong(),
-            );
-        });
+        ui.label(
+            RichText::new(count.to_string())
+                .color(color)
+                .size(11.0)
+                .strong(),
+        );
     });
 
     // Bar

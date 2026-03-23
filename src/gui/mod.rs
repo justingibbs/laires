@@ -928,6 +928,8 @@ impl GuiApp {
                     .inner_margin(egui::Margin::same(12)),
             )
             .show(ctx, |ui| {
+                ui.set_max_width(ui.available_width());
+
                 // Tab bar (mode-aware)
                 ui.horizontal(|ui| {
                     ui.selectable_value(
@@ -1040,13 +1042,54 @@ impl GuiApp {
                         }
                     }
                     RightTab::Graph => {
-                        panels::graph_view::render(
-                            ui,
-                            &mut self.gui_state,
-                            &self.snapshot,
-                            &mut self.graph_layout,
-                            &self.theme,
-                        );
+                        if self.gui_state.selected_node_id.is_some() && self.snapshot.is_some() {
+                            // Split: graph on left, inspector on right
+                            let inspector_w = 280.0_f32;
+                            let graph_w = (ui.available_width() - inspector_w - 12.0).max(200.0);
+                            let avail_h = ui.available_height();
+
+                            ui.horizontal(|ui| {
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(graph_w, avail_h),
+                                    egui::Layout::top_down(egui::Align::LEFT),
+                                    |ui| {
+                                        panels::graph_view::render(
+                                            ui,
+                                            &mut self.gui_state,
+                                            &self.snapshot,
+                                            &mut self.graph_layout,
+                                            &self.theme,
+                                        );
+                                    },
+                                );
+
+                                ui.add_space(4.0);
+
+                                // Inspector in a card frame
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(inspector_w, avail_h),
+                                    egui::Layout::top_down(egui::Align::LEFT),
+                                    |ui| {
+                                        self.theme.card_frame().show(ui, |ui| {
+                                            panels::inspector::render(
+                                                ui,
+                                                &mut self.gui_state,
+                                                self.snapshot.as_ref().unwrap(),
+                                                &self.theme,
+                                            );
+                                        });
+                                    },
+                                );
+                            });
+                        } else {
+                            panels::graph_view::render(
+                                ui,
+                                &mut self.gui_state,
+                                &self.snapshot,
+                                &mut self.graph_layout,
+                                &self.theme,
+                            );
+                        }
                     }
                     RightTab::Brief => {
                         panels::brief::render(
@@ -1239,40 +1282,64 @@ fn build_snapshot(proj: &ProjectData) -> ProjectSnapshot {
 
     // Extract graph data
     let inner = proj.graph.inner_graph();
-    let graph_nodes: Vec<panels::graph_view::GraphNodeInfo> = inner
+    let graph_nodes: Vec<panels::graph_view::SnapshotNode> = inner
         .node_indices()
         .filter_map(|idx| {
             inner.node_weight(idx).map(|node| {
-                let label = match node {
-                    crate::concepts::narrative_graph::GraphNode::Character { name, .. } => {
-                        name.clone()
+                use crate::concepts::narrative_graph::GraphNode;
+                use panels::graph_view::NodeDetail;
+
+                let (label, detail) = match node {
+                    GraphNode::Character { name, aliases, description, .. } => {
+                        (name.clone(), NodeDetail::Character {
+                            name: name.clone(),
+                            aliases: aliases.clone(),
+                            description: description.clone(),
+                        })
                     }
-                    crate::concepts::narrative_graph::GraphNode::Objective {
-                        description, ..
-                    } => {
-                        if description.len() > 30 {
+                    GraphNode::Objective { character_id, scope, description, evidence, confidence, status, .. } => {
+                        let label = if description.len() > 30 {
                             format!("{}...", &description[..27])
                         } else {
                             description.clone()
-                        }
+                        };
+                        (label, NodeDetail::Objective {
+                            character_id: character_id.clone(),
+                            scope: format!("{:?}", scope),
+                            description: description.clone(),
+                            evidence: evidence.clone(),
+                            confidence: *confidence,
+                            status: format!("{:?}", status),
+                        })
                     }
-                    crate::concepts::narrative_graph::GraphNode::Scene { title, id, .. } => {
-                        title.clone().unwrap_or_else(|| id.clone())
+                    GraphNode::Scene { id, title, summary, characters_present, location, time, file_path, .. } => {
+                        let label = title.clone().unwrap_or_else(|| id.clone());
+                        (label, NodeDetail::Scene {
+                            title: title.clone(),
+                            summary: summary.clone(),
+                            characters_present: characters_present.clone(),
+                            location: location.clone(),
+                            time: time.clone(),
+                            file_path: file_path.clone(),
+                        })
                     }
-                    crate::concepts::narrative_graph::GraphNode::Conflict {
-                        description, ..
-                    } => {
-                        if description.len() > 30 {
+                    GraphNode::Conflict { description, objectives, .. } => {
+                        let label = if description.len() > 30 {
                             format!("{}...", &description[..27])
                         } else {
                             description.clone()
-                        }
+                        };
+                        (label, NodeDetail::Conflict {
+                            description: description.clone(),
+                            objectives: objectives.clone(),
+                        })
                     }
                 };
-                panels::graph_view::GraphNodeInfo {
+                panels::graph_view::SnapshotNode {
                     id: node.node_id().to_string(),
                     label,
                     node_type: node.node_type_name().to_string(),
+                    detail,
                 }
             })
         })

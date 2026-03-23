@@ -18,7 +18,13 @@ pub fn render(ctx: &egui::Context, state: &GuiState, theme: &LairesTheme) {
                 .stroke(Stroke::new(1.0, theme.border)),
         )
         .show(ctx, |ui| {
+            let bar_width = ui.available_width();
+            let is_narrow = bar_width < 900.0;
+            let is_very_narrow = bar_width < 600.0;
+
+            ui.set_max_width(bar_width);
             ui.horizontal_centered(|ui| {
+                ui.set_max_width(bar_width);
                 // === Left section: Branding ===
                 ui.label(
                     RichText::new("\u{25C8}")
@@ -34,25 +40,27 @@ pub fn render(ctx: &egui::Context, state: &GuiState, theme: &LairesTheme) {
                             .size(16.0)
                             .strong(),
                     );
-                    ui.label(
-                        RichText::new("Writing Analysis")
-                            .color(theme.text_secondary)
-                            .size(10.0),
-                    );
+                    if !is_very_narrow {
+                        ui.label(
+                            RichText::new("Writing Analysis")
+                                .color(theme.text_secondary)
+                                .size(10.0),
+                        );
+                    }
                 });
 
-                ui.add_space(16.0);
-                ui.label(
-                    RichText::new("\u{2502}")
-                        .color(theme.border)
-                        .size(20.0),
-                );
-                ui.add_space(16.0);
+                ui.add_space(8.0);
 
                 // === Center-left: Project title + provider info ===
-                ui.vertical(|ui| {
+                if !state.project_title.is_empty() {
+                    ui.label(
+                        RichText::new("\u{2502}")
+                            .color(theme.border)
+                            .size(20.0),
+                    );
                     ui.add_space(8.0);
-                    if !state.project_title.is_empty() {
+                    ui.vertical(|ui| {
+                        ui.add_space(8.0);
                         let title = RichText::new(&state.project_title)
                             .color(theme.text_primary)
                             .size(14.0)
@@ -63,15 +71,15 @@ pub fn render(ctx: &egui::Context, state: &GuiState, theme: &LairesTheme) {
                                     .insert_temp(egui::Id::new("switch_to_welcome"), true);
                             });
                         }
-                    }
-                    if !state.model_name.is_empty() {
-                        ui.label(
-                            RichText::new(format!("{} \u{00B7} {}", state.privacy_label, state.model_name))
-                                .color(theme.text_secondary)
-                                .size(11.0),
-                        );
-                    }
-                });
+                        if !is_very_narrow && !state.model_name.is_empty() {
+                            ui.label(
+                                RichText::new(format!("{} \u{00B7} {}", state.privacy_label, state.model_name))
+                                    .color(theme.text_secondary)
+                                    .size(11.0),
+                            );
+                        }
+                    });
+                }
 
                 // === Session mode toggle badge ===
                 ui.add_space(8.0);
@@ -99,31 +107,33 @@ pub fn render(ctx: &egui::Context, state: &GuiState, theme: &LairesTheme) {
                     });
                 }
 
-                // === Center: Search bar (takes remaining space) ===
-                ui.add_space(24.0);
-                let search_width = (ui.available_width() - 280.0).max(120.0);
-                ui.allocate_ui(egui::vec2(search_width, 32.0), |ui| {
-                    ui.add_space(4.0);
-                    egui::Frame::NONE
-                        .fill(theme.bg_secondary)
-                        .stroke(Stroke::new(1.0, theme.border))
-                        .corner_radius(CornerRadius::same(8))
-                        .inner_margin(egui::Margin::symmetric(10, 6))
-                        .show(ui, |ui| {
-                            ui.horizontal_centered(|ui| {
-                                ui.label(
-                                    RichText::new("\u{1F50D}")
-                                        .color(theme.text_secondary)
-                                        .size(12.0),
-                                );
-                                ui.label(
-                                    RichText::new("Search story elements...")
-                                        .color(theme.text_secondary)
-                                        .size(12.0),
-                                );
+                // === Center: Search bar (only if there's room) ===
+                if !is_narrow {
+                    ui.add_space(16.0);
+                    let search_width = (ui.available_width() - 280.0).max(80.0);
+                    ui.allocate_ui(egui::vec2(search_width, 32.0), |ui| {
+                        ui.add_space(4.0);
+                        egui::Frame::NONE
+                            .fill(theme.bg_secondary)
+                            .stroke(Stroke::new(1.0, theme.border))
+                            .corner_radius(CornerRadius::same(8))
+                            .inner_margin(egui::Margin::symmetric(10, 6))
+                            .show(ui, |ui| {
+                                ui.horizontal_centered(|ui| {
+                                    ui.label(
+                                        RichText::new("\u{1F50D}")
+                                            .color(theme.text_secondary)
+                                            .size(12.0),
+                                    );
+                                    ui.label(
+                                        RichText::new("Search story elements...")
+                                            .color(theme.text_secondary)
+                                            .size(12.0),
+                                    );
+                                });
                             });
-                        });
-                });
+                    });
+                }
 
                 // === Right section: Stats + Actions ===
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -136,36 +146,33 @@ pub fn render(ctx: &egui::Context, state: &GuiState, theme: &LairesTheme) {
                         });
                     }
 
-                    ui.add_space(12.0);
+                    ui.add_space(8.0);
 
                     // Agent status
                     match &state.agent_status {
                         AgentStatus::Idle => {
                             ui.label(
-                                RichText::new("\u{25CF} Ready")
+                                RichText::new("\u{25CF}")
                                     .color(theme.objective_color)
                                     .size(11.0),
                             );
                         }
                         AgentStatus::Thinking => {
                             ui.spinner();
-                            ui.label(
-                                RichText::new("Thinking...")
-                                    .color(theme.accent)
-                                    .size(11.0),
-                            );
                         }
                         AgentStatus::ToolCall(name) => {
                             ui.spinner();
-                            ui.label(
-                                RichText::new(format!("{name}..."))
-                                    .color(theme.accent)
-                                    .size(11.0),
-                            );
+                            if !is_very_narrow {
+                                ui.label(
+                                    RichText::new(format!("{name}..."))
+                                        .color(theme.accent)
+                                        .size(11.0),
+                                );
+                            }
                         }
                     }
 
-                    ui.add_space(12.0);
+                    ui.add_space(8.0);
 
                     // Scan / action button
                     if state.char_count == 0 {
@@ -181,25 +188,28 @@ pub fn render(ctx: &egui::Context, state: &GuiState, theme: &LairesTheme) {
                         }
                     }
 
-                    ui.add_space(12.0);
-
-                    // Compact stats
-                    ui.label(
-                        RichText::new(format!(
-                            "{} scenes \u{00B7} {} chars \u{00B7} {} words",
-                            state.scene_count, state.char_count, state.word_count
-                        ))
-                        .color(theme.text_secondary)
-                        .size(11.0),
-                    );
-
-                    if let Some(usage) = &state.last_usage {
+                    // Compact stats (hide on very narrow)
+                    if !is_very_narrow {
                         ui.add_space(8.0);
                         ui.label(
-                            RichText::new(usage)
-                                .color(theme.text_secondary)
-                                .size(10.0),
+                            RichText::new(format!(
+                                "{} scenes \u{00B7} {} chars \u{00B7} {} words",
+                                state.scene_count, state.char_count, state.word_count
+                            ))
+                            .color(theme.text_secondary)
+                            .size(11.0),
                         );
+                    }
+
+                    if !is_narrow {
+                        if let Some(usage) = &state.last_usage {
+                            ui.add_space(8.0);
+                            ui.label(
+                                RichText::new(usage)
+                                    .color(theme.text_secondary)
+                                    .size(10.0),
+                            );
+                        }
                     }
                 });
             });

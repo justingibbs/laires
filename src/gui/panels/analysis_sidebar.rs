@@ -234,14 +234,12 @@ fn render_status_bar(
                 .color(theme.text_primary)
                 .size(11.0),
         );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(
-                RichText::new(format!("{:.0}%", percentage))
-                    .color(color)
-                    .size(11.0)
-                    .strong(),
-            );
-        });
+        ui.label(
+            RichText::new(format!("{:.0}%", percentage))
+                .color(color)
+                .size(11.0)
+                .strong(),
+        );
     });
 
     // Bar

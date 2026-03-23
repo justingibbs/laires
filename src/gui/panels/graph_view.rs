@@ -140,12 +140,46 @@ impl GraphLayoutState {
     }
 }
 
-/// Data extracted from NarrativeGraph for rendering.
-pub struct GraphNodeInfo {
+/// Full node detail for the inspector panel.
+#[derive(Clone)]
+pub enum NodeDetail {
+    Character {
+        name: String,
+        aliases: Vec<String>,
+        description: Option<String>,
+    },
+    Objective {
+        character_id: String,
+        scope: String,
+        description: String,
+        evidence: Vec<String>,
+        confidence: f64,
+        status: String,
+    },
+    Scene {
+        title: Option<String>,
+        summary: String,
+        characters_present: Vec<String>,
+        location: Option<String>,
+        time: Option<String>,
+        file_path: String,
+    },
+    Conflict {
+        description: String,
+        objectives: Vec<String>,
+    },
+}
+
+/// Data extracted from NarrativeGraph for rendering and inspection.
+pub struct SnapshotNode {
     pub id: String,
     pub label: String,
     pub node_type: String,
+    pub detail: NodeDetail,
 }
+
+/// Backwards-compatible alias used by dashboard and other panels.
+pub type GraphNodeInfo = SnapshotNode;
 
 pub struct GraphEdgeInfo {
     pub source: String,
@@ -363,15 +397,9 @@ pub fn render(
         // === Legend overlay (bottom-left) ===
         render_legend(&painter, rect, theme);
 
-        // === Node info panel (bottom-right, when selected) ===
-        if let Some(selected_id) = &state.selected_node_id {
-            if let Some(info) = snap
-                .graph_nodes
-                .iter()
-                .find(|n| n.id == *selected_id)
-            {
-                render_info_panel(&painter, rect, info, snap, theme);
-            }
+        // Deselect when clicking empty space (no node hit)
+        if response.clicked() && clicked_node.is_none() {
+            state.selected_node_id = None;
         }
     });
 }
@@ -449,75 +477,6 @@ fn render_legend(painter: &egui::Painter, rect: Rect, theme: &LairesTheme) {
     }
 }
 
-/// Renders the node info panel in the bottom-right corner.
-fn render_info_panel(
-    painter: &egui::Painter,
-    rect: Rect,
-    info: &GraphNodeInfo,
-    snap: &ProjectSnapshot,
-    theme: &LairesTheme,
-) {
-    let panel_w = 260.0;
-    let panel_h = 90.0;
-    let margin = 12.0;
-    let panel_rect = Rect::from_min_size(
-        Pos2::new(
-            rect.max.x - panel_w - margin,
-            rect.max.y - panel_h - margin,
-        ),
-        Vec2::new(panel_w, panel_h),
-    );
-
-    // Background
-    painter.rect_filled(
-        panel_rect,
-        CornerRadius::same(10),
-        Color32::from_rgba_premultiplied(0xFF, 0xFF, 0xFF, 240),
-    );
-    painter.rect_stroke(
-        panel_rect,
-        CornerRadius::same(10),
-        Stroke::new(1.0, theme.border),
-        egui::StrokeKind::Outside,
-    );
-
-    let color = node_color(&info.node_type, theme);
-    let x = panel_rect.min.x + 12.0;
-
-    // Colored type badge
-    let badge_y = panel_rect.min.y + 14.0;
-    painter.circle_filled(Pos2::new(x + 5.0, badge_y), 5.0, color);
-    painter.text(
-        Pos2::new(x + 16.0, badge_y),
-        egui::Align2::LEFT_CENTER,
-        info.node_type.to_uppercase(),
-        egui::FontId::proportional(9.0),
-        color,
-    );
-
-    // Name
-    painter.text(
-        Pos2::new(x, panel_rect.min.y + 34.0),
-        egui::Align2::LEFT_TOP,
-        &info.label,
-        egui::FontId::proportional(15.0),
-        theme.text_primary,
-    );
-
-    // Connection count
-    let connections = snap
-        .graph_edges
-        .iter()
-        .filter(|e| e.source == info.id || e.target == info.id)
-        .count();
-    painter.text(
-        Pos2::new(x, panel_rect.min.y + 58.0),
-        egui::Align2::LEFT_TOP,
-        format!("{} connections", connections),
-        egui::FontId::proportional(11.0),
-        theme.text_secondary,
-    );
-}
 
 fn node_color(node_type: &str, theme: &LairesTheme) -> Color32 {
     match node_type {
