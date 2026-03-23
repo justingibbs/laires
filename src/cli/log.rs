@@ -1,7 +1,9 @@
-use crate::concepts::narrative_graph::{diff_graphs, NarrativeGraph};
+use crate::concepts::narrative_graph::{NarrativeGraph, diff_graphs};
 use crate::config::{self, GRAPH_FILE, LAIRES_DIR};
 
-use super::diff::{detect_vcs, format_diff_summary, format_graph_diff, vcs_log_for_file, vcs_root, vcs_show};
+use super::diff::{
+    detect_vcs, format_diff_summary, format_graph_diff, vcs_log_for_file, vcs_root, vcs_show,
+};
 
 pub fn run(count: usize, verbose: bool) -> anyhow::Result<()> {
     let project_dir = std::env::current_dir()?;

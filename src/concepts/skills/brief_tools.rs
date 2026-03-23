@@ -21,10 +21,7 @@ impl Skills {
             }
         };
 
-        let scene_title = args["scene_title"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let scene_title = args["scene_title"].as_str().unwrap_or("").to_string();
         let file = args["file"].as_str().unwrap_or("").to_string();
         let priority = args["priority"]
             .as_str()
@@ -55,8 +52,7 @@ impl Skills {
             ctx.scene_map,
             ctx.file_buffer_manager.as_deref(),
         );
-        let (scene_id, line_start, line_end) =
-            resolve_scene_location(&story, &scene_title, &file);
+        let (scene_id, line_start, line_end) = resolve_scene_location(&story, &scene_title, &file);
 
         let revision = Revision {
             scene_id,
@@ -163,11 +159,7 @@ fn resolve_scene_location(
     let title_lower = scene_title.to_lowercase();
 
     for summary in &story.list_scenes() {
-        let span_title = summary
-            .title
-            .as_deref()
-            .unwrap_or("")
-            .to_lowercase();
+        let span_title = summary.title.as_deref().unwrap_or("").to_lowercase();
 
         if !span_title.is_empty() && span_title.contains(&title_lower) {
             // Read the scene to get text, then estimate line numbers

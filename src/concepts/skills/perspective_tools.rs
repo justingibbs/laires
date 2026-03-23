@@ -2,7 +2,7 @@ use crate::concepts::character_perspective::CharacterPerspective;
 use crate::concepts::narrative_graph::GraphNode;
 use crate::concepts::provider::Provider;
 
-use super::{find_character_id, SkillContext, Skills};
+use super::{SkillContext, Skills, find_character_id};
 
 impl Skills {
     pub(super) async fn exec_interpret_as_character(
@@ -17,7 +17,7 @@ impl Skills {
             None => {
                 return serde_json::json!({
                     "error": format!("Character not found: {character_name}")
-                })
+                });
             }
         };
 
@@ -26,7 +26,7 @@ impl Skills {
             None => {
                 return serde_json::json!({
                     "error": "LLM provider required for perspective analysis"
-                })
+                });
             }
         };
 
@@ -45,11 +45,17 @@ impl Skills {
                         None => {
                             return serde_json::json!({
                                 "error": "Perspective store not available"
-                            })
+                            });
                         }
                     };
                     match perspectives
-                        .generate_scene_perspective(&char_id, &sid, ctx.graph, &scene_text, provider)
+                        .generate_scene_perspective(
+                            &char_id,
+                            &sid,
+                            ctx.graph,
+                            &scene_text,
+                            provider,
+                        )
                         .await
                     {
                         Ok(sp) => serde_json::json!(sp),
@@ -66,7 +72,7 @@ impl Skills {
                 None => {
                     return serde_json::json!({
                         "error": "Perspective store not available"
-                    })
+                    });
                 }
             };
             match perspectives
@@ -94,7 +100,7 @@ impl Skills {
             None => {
                 return serde_json::json!({
                     "error": format!("Character not found: {char_a_name}")
-                })
+                });
             }
         };
         let char_b = match find_character_id(ctx.graph, char_b_name) {
@@ -102,7 +108,7 @@ impl Skills {
             None => {
                 return serde_json::json!({
                     "error": format!("Character not found: {char_b_name}")
-                })
+                });
             }
         };
 
@@ -112,7 +118,7 @@ impl Skills {
             None => {
                 return serde_json::json!({
                     "error": format!("Scene not found: {scene_ref}")
-                })
+                });
             }
         };
 
@@ -121,7 +127,7 @@ impl Skills {
             None => {
                 return serde_json::json!({
                     "error": "LLM provider required for perspective comparison"
-                })
+                });
             }
         };
 
@@ -136,11 +142,18 @@ impl Skills {
             None => {
                 return serde_json::json!({
                     "error": "Perspective store not available"
-                })
+                });
             }
         };
         match perspectives
-            .compare_perspectives(&char_a, &char_b, &scene_id, ctx.graph, &scene_text, provider)
+            .compare_perspectives(
+                &char_a,
+                &char_b,
+                &scene_id,
+                ctx.graph,
+                &scene_text,
+                provider,
+            )
             .await
         {
             Ok(result) => serde_json::json!(result),
@@ -160,7 +173,7 @@ impl Skills {
             None => {
                 return serde_json::json!({
                     "error": format!("Character not found: {character_name}")
-                })
+                });
             }
         };
 
@@ -169,7 +182,7 @@ impl Skills {
             None => {
                 return serde_json::json!({
                     "error": "LLM provider required for blind spot analysis"
-                })
+                });
             }
         };
 
@@ -178,11 +191,14 @@ impl Skills {
             None => {
                 return serde_json::json!({
                     "error": "Perspective store not available"
-                })
+                });
             }
         };
 
-        match perspectives.find_blind_spots(&char_id, ctx.graph, provider).await {
+        match perspectives
+            .find_blind_spots(&char_id, ctx.graph, provider)
+            .await
+        {
             Ok(spots) => serde_json::json!({
                 "character": character_name,
                 "blind_spot_count": spots.len(),
@@ -203,7 +219,7 @@ impl Skills {
             None => {
                 return serde_json::json!({
                     "error": format!("Character not found: {character_name}")
-                })
+                });
             }
         };
 

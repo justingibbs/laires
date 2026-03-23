@@ -2,7 +2,7 @@ use crate::concepts::declared_intent::DeclaredIntent;
 use crate::concepts::narrative_graph::{GraphNode, NarrativeGraph};
 use crate::concepts::scene_map::{ParseMode, SceneMap};
 use crate::concepts::text_buffer::TextBuffer;
-use crate::config::{self, ProjectConfig, LAIRES_DIR, OVERRIDES_FILE};
+use crate::config::{self, LAIRES_DIR, OVERRIDES_FILE, ProjectConfig};
 use crate::sync::divergence;
 
 pub fn run() -> anyhow::Result<()> {

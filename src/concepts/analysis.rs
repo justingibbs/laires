@@ -91,8 +91,7 @@ struct QueueEntry(AnalysisTask);
 
 impl PartialEq for QueueEntry {
     fn eq(&self, other: &Self) -> bool {
-        self.0.priority == other.0.priority
-            && self.0.created == other.0.created
+        self.0.priority == other.0.priority && self.0.created == other.0.created
     }
 }
 impl Eq for QueueEntry {}
@@ -135,11 +134,7 @@ impl Analysis {
 
     /// Check cache for a previous analysis
     #[allow(dead_code)]
-    pub fn get_cached(
-        &self,
-        scene_id: &str,
-        content_hash: &str,
-    ) -> Option<&AnalysisResult> {
+    pub fn get_cached(&self, scene_id: &str, content_hash: &str) -> Option<&AnalysisResult> {
         self.cache
             .get(&(scene_id.to_string(), content_hash.to_string()))
     }
@@ -147,8 +142,7 @@ impl Analysis {
     /// Invalidate cached results for a scene
     #[allow(dead_code)]
     pub fn invalidate(&mut self, scene_id: &str) {
-        self.cache
-            .retain(|(sid, _), _| sid != scene_id);
+        self.cache.retain(|(sid, _), _| sid != scene_id);
     }
 
     /// Process the next task in the queue using the LLM
@@ -170,9 +164,7 @@ impl Analysis {
         };
 
         let scene_id = match &task.kind {
-            AnalysisKind::SceneAnalysis { scene_id } => {
-                Some(scene_id.clone())
-            }
+            AnalysisKind::SceneAnalysis { scene_id } => Some(scene_id.clone()),
             AnalysisKind::FullAnalysis => None,
         };
 
@@ -187,9 +179,7 @@ impl Analysis {
 
         let system_prompt = ANALYSIS_SYSTEM_PROMPT;
 
-        let response = provider
-            .complete(&messages, &[], Some(system_prompt))
-            .await;
+        let response = provider.complete(&messages, &[], Some(system_prompt)).await;
 
         match response {
             Ok(resp) => {
@@ -212,11 +202,8 @@ impl Analysis {
                     );
                 }
 
-                let result = parse_analysis_response(
-                    &raw_content,
-                    scene_id.as_deref(),
-                    content_hash,
-                );
+                let result =
+                    parse_analysis_response(&raw_content, scene_id.as_deref(), content_hash);
 
                 // Only warn if the scene has enough text to expect characters
                 // (short scenes like title pages legitimately have none)
@@ -236,10 +223,8 @@ impl Analysis {
 
                 // Cache the result
                 if let Some(sid) = &result.scene_id {
-                    self.cache.insert(
-                        (sid.clone(), content_hash.to_string()),
-                        result.clone(),
-                    );
+                    self.cache
+                        .insert((sid.clone(), content_hash.to_string()), result.clone());
                 }
 
                 self.status = AnalysisStatus::Idle;
@@ -309,11 +294,7 @@ IMPORTANT:
 - Both arrays are required, even though they overlap. Do not omit the top-level "characters" array.
 - Be precise. Extract only what the text supports. Use confidence scores honestly. If unsure about an objective, set confidence below 0.5."#;
 
-fn build_analysis_prompt(
-    scene_text: &str,
-    graph_context: &str,
-    is_scene_analysis: bool,
-) -> String {
+fn build_analysis_prompt(scene_text: &str, graph_context: &str, is_scene_analysis: bool) -> String {
     let scope = if is_scene_analysis {
         "this scene"
     } else {
@@ -385,6 +366,8 @@ pub fn apply_analysis_to_graph(
 ) -> Vec<String> {
     use crate::concepts::narrative_graph::*;
 
+    graph.clear_scene_analysis(scene_id, false);
+
     // Add characters
     for char_data in &result.characters_found {
         let existing = graph.get_characters().iter().find_map(|c| {
@@ -437,10 +420,7 @@ pub fn apply_analysis_to_graph(
 
     let scene_node = GraphNode::Scene {
         id: scene_id.to_string(),
-        title: result
-            .scene_metadata
-            .as_ref()
-            .and_then(|m| m.title.clone()),
+        title: result.scene_metadata.as_ref().and_then(|m| m.title.clone()),
         summary: result
             .scene_metadata
             .as_ref()
@@ -451,10 +431,7 @@ pub fn apply_analysis_to_graph(
             .scene_metadata
             .as_ref()
             .and_then(|m| m.location.clone()),
-        time: result
-            .scene_metadata
-            .as_ref()
-            .and_then(|m| m.time.clone()),
+        time: result.scene_metadata.as_ref().and_then(|m| m.time.clone()),
         file_path: file_path.to_string(),
     };
 
@@ -539,6 +516,7 @@ pub fn apply_analysis_to_graph(
             id: conflict_id,
             description: conflict_data.description.clone(),
             objectives: objective_ids,
+            scene_id: Some(scene_id.to_string()),
         });
     }
 
@@ -582,10 +560,7 @@ fn parse_analysis_response(
                                     .collect()
                             })
                             .unwrap_or_default(),
-                        description: c["description"]
-                            .as_str()
-                            .unwrap_or_default()
-                            .to_string(),
+                        description: c["description"].as_str().unwrap_or_default().to_string(),
                     })
                 })
                 .collect()

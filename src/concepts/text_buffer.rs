@@ -70,9 +70,8 @@ impl TextBuffer {
         let content = if self.file_path.extension().and_then(|e| e.to_str()) == Some("docx") {
             crate::concepts::docx::extract_text_from_docx(&self.file_path)?
         } else {
-            std::fs::read_to_string(&self.file_path).map_err(|_| {
-                LairesError::StoryFileNotFound(self.file_path.display().to_string())
-            })?
+            std::fs::read_to_string(&self.file_path)
+                .map_err(|_| LairesError::StoryFileNotFound(self.file_path.display().to_string()))?
         };
         self.rope = Rope::from_str(&content);
         self.dirty = false;

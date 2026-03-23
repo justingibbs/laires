@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use crate::config::{self, LAIRES_DIR, MANIFEST_FILE};
 use crate::concepts::manifest::{Manifest, StoryFile};
+use crate::config::{self, LAIRES_DIR, MANIFEST_FILE};
 
 pub fn run(file: &str) -> anyhow::Result<()> {
     let project_dir = std::env::current_dir()?;
@@ -32,7 +32,10 @@ pub fn run(file: &str) -> anyhow::Result<()> {
             anyhow::bail!("{} is already a Markdown file.", file);
         }
         "fountain" => {
-            anyhow::bail!("{} is already a Fountain file (editable in Workshop mode).", file);
+            anyhow::bail!(
+                "{} is already a Fountain file (editable in Workshop mode).",
+                file
+            );
         }
         _ => {
             anyhow::bail!("Unsupported format: .{ext}. Supported: .docx, .txt");
@@ -46,7 +49,10 @@ pub fn run(file: &str) -> anyhow::Result<()> {
         .to_string_lossy()
         .to_string()
         + ".md";
-    let md_path = source_path.parent().unwrap_or(&project_root).join(&md_filename);
+    let md_path = source_path
+        .parent()
+        .unwrap_or(&project_root)
+        .join(&md_filename);
 
     if md_path.exists() {
         anyhow::bail!(

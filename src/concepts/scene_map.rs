@@ -167,7 +167,11 @@ impl SceneMap {
             let character_name = name_match.as_str().trim().to_string();
 
             // Find which scene this cue belongs to
-            if let Some(scene) = self.scenes.iter().find(|s| s.start <= byte_offset && byte_offset < s.end) {
+            if let Some(scene) = self
+                .scenes
+                .iter()
+                .find(|s| s.start <= byte_offset && byte_offset < s.end)
+            {
                 self.character_cues.push(CharacterCue {
                     character_name,
                     scene_id: scene.id.clone(),
@@ -290,15 +294,13 @@ fn detect_prose_boundaries(text: &str) -> Vec<SceneBoundary> {
     let mut boundaries = Vec::new();
 
     // Pattern 1: Horizontal rules (---, ***, ___)
-    let hr_re =
-        Regex::new(r"(?m)^[ \t]*(-{3,}|\*{3,}|_{3,})[ \t]*$").unwrap();
+    let hr_re = Regex::new(r"(?m)^[ \t]*(-{3,}|\*{3,}|_{3,})[ \t]*$").unwrap();
 
     // Pattern 2: Markdown headings (## Chapter 3, ### Scene 2)
     let heading_re = Regex::new(r"(?m)^(#{1,6})\s+(.+)$").unwrap();
 
     // Pattern 3: HTML comment markers <!-- scene: "title" -->
-    let comment_re =
-        Regex::new(r#"(?m)<!--\s*scene:\s*"([^"]+)"\s*-->"#).unwrap();
+    let comment_re = Regex::new(r#"(?m)<!--\s*scene:\s*"([^"]+)"\s*-->"#).unwrap();
 
     // Collect all boundaries with their byte offsets
     for m in hr_re.find_iter(text) {
@@ -358,9 +360,7 @@ fn detect_fountain_boundaries(text: &str) -> Vec<SceneBoundary> {
     let mut boundaries = Vec::new();
 
     // Fountain scene headings: INT. or EXT. (or INT./EXT., I/E, etc.)
-    let scene_re =
-        Regex::new(r"(?mi)^(INT\.|EXT\.|INT\./EXT\.|I/E\.|EST\.)[\t ]+(.+)$")
-            .unwrap();
+    let scene_re = Regex::new(r"(?mi)^(INT\.|EXT\.|INT\./EXT\.|I/E\.|EST\.)[\t ]+(.+)$").unwrap();
 
     for caps in scene_re.captures_iter(text) {
         let m = caps.get(0).unwrap();
@@ -402,14 +402,8 @@ mod tests {
         let mut map = SceneMap::new(ParseMode::Prose);
         map.full_reindex(text, "");
         assert_eq!(map.scene_count(), 2);
-        assert_eq!(
-            map.scenes[0].title.as_deref(),
-            Some("Chapter 1")
-        );
-        assert_eq!(
-            map.scenes[1].title.as_deref(),
-            Some("Chapter 2")
-        );
+        assert_eq!(map.scenes[0].title.as_deref(), Some("Chapter 1"));
+        assert_eq!(map.scenes[1].title.as_deref(), Some("Chapter 2"));
     }
 
     #[test]
@@ -465,10 +459,11 @@ Every city has a shadow. Sydney shadow had a name: Victor Kovac. Maguire had nev
             map.scene_count()
         );
         // The parts should have their titles
-        let titles: Vec<Option<&str>> =
-            map.scenes.iter().map(|s| s.title.as_deref()).collect();
+        let titles: Vec<Option<&str>> = map.scenes.iter().map(|s| s.title.as_deref()).collect();
         assert!(
-            titles.iter().any(|t| t == &Some("Part One: Smoke and Mirrors")),
+            titles
+                .iter()
+                .any(|t| t == &Some("Part One: Smoke and Mirrors")),
             "Missing Part One title in {titles:?}"
         );
     }

@@ -1,8 +1,8 @@
 use eframe::egui::{self, Color32, CornerRadius, RichText, Stroke, Vec2};
 
+use crate::gui::ProjectSnapshot;
 use crate::gui::state::GuiState;
 use crate::gui::theme::LairesTheme;
-use crate::gui::ProjectSnapshot;
 
 /// Width of the analysis sidebar when visible.
 pub const SIDEBAR_WIDTH: f32 = 230.0;
@@ -172,10 +172,8 @@ fn render_toggle_row(
     color: Color32,
     theme: &LairesTheme,
 ) {
-    let (rect, response) = ui.allocate_exact_size(
-        Vec2::new(ui.available_width(), 28.0),
-        egui::Sense::click(),
-    );
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 28.0), egui::Sense::click());
 
     if response.clicked() {
         *enabled = !*enabled;
@@ -229,11 +227,7 @@ fn render_status_bar(
     theme: &LairesTheme,
 ) {
     ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(label)
-                .color(theme.text_primary)
-                .size(11.0),
-        );
+        ui.label(RichText::new(label).color(theme.text_primary).size(11.0));
         ui.label(
             RichText::new(format!("{:.0}%", percentage))
                 .color(color)
@@ -252,10 +246,8 @@ fn render_status_bar(
 
     let frac = (percentage / 100.0).clamp(0.0, 1.0);
     if frac > 0.0 {
-        let filled = egui::Rect::from_min_size(
-            rect.min,
-            Vec2::new(rect.width() * frac, rect.height()),
-        );
+        let filled =
+            egui::Rect::from_min_size(rect.min, Vec2::new(rect.width() * frac, rect.height()));
         painter.rect_filled(filled, CornerRadius::same(3), color);
     }
 }

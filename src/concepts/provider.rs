@@ -104,34 +104,25 @@ fn resolve_config(
 ) -> Result<(ProviderType, String), LairesError> {
     let provider_type = match provider_str {
         "anthropic" => ProviderType::Anthropic,
-        "openai-compatible" | "openai" | "gemini" => {
-            ProviderType::OpenAiCompatible
-        }
+        "openai-compatible" | "openai" | "gemini" => ProviderType::OpenAiCompatible,
         "pydantic-gateway" | "pydantic" => ProviderType::PydanticGateway,
         "local" => ProviderType::Local,
         other => {
             return Err(LairesError::Provider(format!(
                 "Unknown provider type: {other}"
-            )))
+            )));
         }
     };
 
-    let base_url = explicit_base_url
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| match provider_type {
-            ProviderType::Anthropic => {
-                "https://api.anthropic.com".to_string()
-            }
-            ProviderType::OpenAiCompatible => {
-                "https://api.openai.com/v1".to_string()
-            }
-            ProviderType::PydanticGateway => {
-                "http://localhost:8000/v1".to_string()
-            }
-            ProviderType::Local => {
-                "http://localhost:11434/v1".to_string()
-            }
-        });
+    let base_url =
+        explicit_base_url
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| match provider_type {
+                ProviderType::Anthropic => "https://api.anthropic.com".to_string(),
+                ProviderType::OpenAiCompatible => "https://api.openai.com/v1".to_string(),
+                ProviderType::PydanticGateway => "http://localhost:8000/v1".to_string(),
+                ProviderType::Local => "http://localhost:11434/v1".to_string(),
+            });
 
     Ok((provider_type, base_url))
 }
@@ -154,13 +145,9 @@ impl Provider {
     }
 
     /// Create a provider from project config
-    pub fn from_project_config(
-        config: &crate::config::ProjectConfig,
-    ) -> Result<Self, LairesError> {
-        let (provider_type, base_url) = resolve_config(
-            &config.llm.provider,
-            config.llm.base_url.as_deref(),
-        )?;
+    pub fn from_project_config(config: &crate::config::ProjectConfig) -> Result<Self, LairesError> {
+        let (provider_type, base_url) =
+            resolve_config(&config.llm.provider, config.llm.base_url.as_deref())?;
 
         let provider_config = ProviderConfig {
             provider_type,
@@ -178,10 +165,8 @@ impl Provider {
         config: &crate::config::ProjectConfig,
         model: &str,
     ) -> Result<Self, LairesError> {
-        let (provider_type, base_url) = resolve_config(
-            &config.llm.provider,
-            config.llm.base_url.as_deref(),
-        )?;
+        let (provider_type, base_url) =
+            resolve_config(&config.llm.provider, config.llm.base_url.as_deref())?;
 
         let provider_config = ProviderConfig {
             provider_type,
@@ -215,9 +200,7 @@ impl Provider {
             }
             ProviderType::OpenAiCompatible
             | ProviderType::PydanticGateway
-            | ProviderType::Local => {
-                self.complete_openai(messages, tools, system_prompt).await
-            }
+            | ProviderType::Local => self.complete_openai(messages, tools, system_prompt).await,
         }
     }
 
@@ -250,13 +233,18 @@ impl Provider {
         }
 
         if !tools.is_empty() {
-            body["tools"] = serde_json::json!(tools.iter().map(|t| {
-                serde_json::json!({
-                    "name": t.name,
-                    "description": t.description,
-                    "input_schema": t.parameters,
-                })
-            }).collect::<Vec<_>>());
+            body["tools"] = serde_json::json!(
+                tools
+                    .iter()
+                    .map(|t| {
+                        serde_json::json!({
+                            "name": t.name,
+                            "description": t.description,
+                            "input_schema": t.parameters,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            );
         }
 
         let url = format!("{}/v1/messages", self.config.base_url);
@@ -306,14 +294,8 @@ impl Provider {
                     }
                     Some("tool_use") => {
                         tool_calls.push(ToolCall {
-                            id: block["id"]
-                                .as_str()
-                                .unwrap_or_default()
-                                .to_string(),
-                            name: block["name"]
-                                .as_str()
-                                .unwrap_or_default()
-                                .to_string(),
+                            id: block["id"].as_str().unwrap_or_default().to_string(),
+                            name: block["name"].as_str().unwrap_or_default().to_string(),
                             arguments: block["input"].clone(),
                         });
                     }
@@ -323,12 +305,8 @@ impl Provider {
         }
 
         let usage = ResponseUsage {
-            prompt_tokens: resp_json["usage"]["input_tokens"]
-                .as_u64()
-                .unwrap_or(0),
-            completion_tokens: resp_json["usage"]["output_tokens"]
-                .as_u64()
-                .unwrap_or(0),
+            prompt_tokens: resp_json["usage"]["input_tokens"].as_u64().unwrap_or(0),
+            completion_tokens: resp_json["usage"]["output_tokens"].as_u64().unwrap_or(0),
         };
 
         self.metrics.total_tokens += usage.prompt_tokens + usage.completion_tokens;
@@ -365,16 +343,21 @@ impl Provider {
         });
 
         if !tools.is_empty() {
-            body["tools"] = serde_json::json!(tools.iter().map(|t| {
-                serde_json::json!({
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.parameters,
-                    }
-                })
-            }).collect::<Vec<_>>());
+            body["tools"] = serde_json::json!(
+                tools
+                    .iter()
+                    .map(|t| {
+                        serde_json::json!({
+                            "type": "function",
+                            "function": {
+                                "name": t.name,
+                                "description": t.description,
+                                "parameters": t.parameters,
+                            }
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            );
         }
 
         let url = format!("{}/chat/completions", self.config.base_url);
@@ -428,10 +411,8 @@ impl Provider {
                         Some(ToolCall {
                             id: tc["id"].as_str()?.to_string(),
                             name: tc["function"]["name"].as_str()?.to_string(),
-                            arguments: serde_json::from_str(
-                                tc["function"]["arguments"].as_str()?,
-                            )
-                            .ok()?,
+                            arguments: serde_json::from_str(tc["function"]["arguments"].as_str()?)
+                                .ok()?,
                         })
                     })
                     .collect()
@@ -439,9 +420,7 @@ impl Provider {
             .unwrap_or_default();
 
         let usage = ResponseUsage {
-            prompt_tokens: resp_json["usage"]["prompt_tokens"]
-                .as_u64()
-                .unwrap_or(0),
+            prompt_tokens: resp_json["usage"]["prompt_tokens"].as_u64().unwrap_or(0),
             completion_tokens: resp_json["usage"]["completion_tokens"]
                 .as_u64()
                 .unwrap_or(0),
@@ -462,10 +441,8 @@ impl Provider {
         &mut self,
         config: &crate::config::ProjectConfig,
     ) -> Result<(), LairesError> {
-        let (provider_type, base_url) = resolve_config(
-            &config.llm.provider,
-            config.llm.base_url.as_deref(),
-        )?;
+        let (provider_type, base_url) =
+            resolve_config(&config.llm.provider, config.llm.base_url.as_deref())?;
 
         self.config = ProviderConfig {
             provider_type,
@@ -500,8 +477,7 @@ impl Provider {
                 true
             }
             Err(e) => {
-                self.connection_status =
-                    ConnectionStatus::Error(e.to_string());
+                self.connection_status = ConnectionStatus::Error(e.to_string());
                 false
             }
         }
@@ -772,12 +748,36 @@ mod tests {
     #[test]
     fn test_resolve_config_all_providers() {
         let cases = vec![
-            ("anthropic", ProviderType::Anthropic, "https://api.anthropic.com"),
-            ("openai", ProviderType::OpenAiCompatible, "https://api.openai.com/v1"),
-            ("openai-compatible", ProviderType::OpenAiCompatible, "https://api.openai.com/v1"),
-            ("gemini", ProviderType::OpenAiCompatible, "https://api.openai.com/v1"),
-            ("pydantic-gateway", ProviderType::PydanticGateway, "http://localhost:8000/v1"),
-            ("pydantic", ProviderType::PydanticGateway, "http://localhost:8000/v1"),
+            (
+                "anthropic",
+                ProviderType::Anthropic,
+                "https://api.anthropic.com",
+            ),
+            (
+                "openai",
+                ProviderType::OpenAiCompatible,
+                "https://api.openai.com/v1",
+            ),
+            (
+                "openai-compatible",
+                ProviderType::OpenAiCompatible,
+                "https://api.openai.com/v1",
+            ),
+            (
+                "gemini",
+                ProviderType::OpenAiCompatible,
+                "https://api.openai.com/v1",
+            ),
+            (
+                "pydantic-gateway",
+                ProviderType::PydanticGateway,
+                "http://localhost:8000/v1",
+            ),
+            (
+                "pydantic",
+                ProviderType::PydanticGateway,
+                "http://localhost:8000/v1",
+            ),
             ("local", ProviderType::Local, "http://localhost:11434/v1"),
         ];
 
@@ -790,8 +790,7 @@ mod tests {
 
     #[test]
     fn test_resolve_config_explicit_url_overrides() {
-        let (_, url) =
-            resolve_config("anthropic", Some("https://custom.api.com")).unwrap();
+        let (_, url) = resolve_config("anthropic", Some("https://custom.api.com")).unwrap();
         assert_eq!(url, "https://custom.api.com");
     }
 
@@ -905,19 +904,14 @@ mod tests {
             classification: ClassificationConfig::default(),
         };
 
-        let provider = Provider::from_project_config_with_model(
-            &project_config,
-            "claude-haiku-4-5-20251001",
-        )
-        .unwrap();
+        let provider =
+            Provider::from_project_config_with_model(&project_config, "claude-haiku-4-5-20251001")
+                .unwrap();
 
         // Model should be overridden
         assert_eq!(provider.model_name(), "claude-haiku-4-5-20251001");
         // But provider type should match the project config
-        assert_eq!(
-            provider.config().provider_type,
-            ProviderType::Anthropic
-        );
+        assert_eq!(provider.config().provider_type, ProviderType::Anthropic);
     }
 
     #[test]

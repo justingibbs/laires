@@ -110,7 +110,12 @@ impl RevisionBrief {
 
         // Header
         writeln!(md, "# Revision Brief — {}", self.project_title).unwrap();
-        writeln!(md, "Generated: {}", self.created.format("%Y-%m-%d %H:%M UTC")).unwrap();
+        writeln!(
+            md,
+            "Generated: {}",
+            self.created.format("%Y-%m-%d %H:%M UTC")
+        )
+        .unwrap();
         writeln!(md).unwrap();
         writeln!(md, "---").unwrap();
         writeln!(md).unwrap();
@@ -218,7 +223,13 @@ impl RevisionBrief {
                 writeln!(md, "- [ ] {}", label).unwrap();
             }
             for note in &self.structural_notes {
-                writeln!(md, "- [ ] {}: {}", note.category, first_sentence(&note.note)).unwrap();
+                writeln!(
+                    md,
+                    "- [ ] {}: {}",
+                    note.category,
+                    first_sentence(&note.note)
+                )
+                .unwrap();
             }
             writeln!(md).unwrap();
         }

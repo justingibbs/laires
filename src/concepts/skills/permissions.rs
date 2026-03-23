@@ -3,8 +3,7 @@ use super::{Permission, Skills};
 impl Skills {
     pub fn set_permission(&mut self, skill_name: &str, permission: Permission) {
         if self.registry.contains_key(skill_name) {
-            self.permissions
-                .insert(skill_name.to_string(), permission);
+            self.permissions.insert(skill_name.to_string(), permission);
         }
     }
 

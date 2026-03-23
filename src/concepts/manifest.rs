@@ -121,11 +121,7 @@ pub fn discover_files(project_dir: &Path) -> anyhow::Result<Vec<DiscoveredFile>>
     Ok(files)
 }
 
-fn walk_dir(
-    root: &Path,
-    dir: &Path,
-    out: &mut Vec<DiscoveredFile>,
-) -> anyhow::Result<()> {
+fn walk_dir(root: &Path, dir: &Path, out: &mut Vec<DiscoveredFile>) -> anyhow::Result<()> {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return Ok(()),
@@ -147,10 +143,7 @@ fn walk_dir(
         }
 
         // Check extension
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         if !SUPPORTED_EXTENSIONS.contains(&ext) {
             continue;
         }
@@ -210,10 +203,7 @@ pub struct ManifestDiff {
     pub unchanged_files: Vec<String>,
 }
 
-pub fn diff_against_manifest(
-    discovered: &[DiscoveredFile],
-    existing: &Manifest,
-) -> ManifestDiff {
+pub fn diff_against_manifest(discovered: &[DiscoveredFile], existing: &Manifest) -> ManifestDiff {
     use std::collections::HashMap;
 
     // Build hash map from existing manifest (path -> content_hash)
@@ -346,9 +336,7 @@ fn truncate_snippet(s: &str, max_chars: usize) -> String {
     }
 }
 
-pub fn parse_classification_response(
-    response: &str,
-) -> anyhow::Result<ClassificationResult> {
+pub fn parse_classification_response(response: &str) -> anyhow::Result<ClassificationResult> {
     let parsed = extract_json(response)
         .ok_or_else(|| anyhow::anyhow!("Failed to extract JSON from classification response"))?;
 
@@ -359,10 +347,7 @@ pub fn parse_classification_response(
                 .filter_map(|sf| {
                     Some(ClassifiedStoryFile {
                         path: sf["path"].as_str()?.to_string(),
-                        format: sf["format"]
-                            .as_str()
-                            .unwrap_or("prose")
-                            .to_string(),
+                        format: sf["format"].as_str().unwrap_or("prose").to_string(),
                         order: sf["order"].as_u64().unwrap_or(0) as usize,
                     })
                 })
@@ -422,10 +407,7 @@ pub fn print_classification(result: &ClassificationResult) {
     if !result.story_files.is_empty() {
         println!("  Story files (narrative content):");
         for sf in &result.story_files {
-            println!(
-                "    {}. {} ({})",
-                sf.order, sf.path, sf.format
-            );
+            println!("    {}. {} ({})", sf.order, sf.path, sf.format);
         }
     }
 
@@ -467,10 +449,7 @@ pub fn build_manifest_from_classification(
             path: sf.path.clone(),
             format: sf.format.clone(),
             order: sf.order,
-            content_hash: hash_map
-                .get(sf.path.as_str())
-                .unwrap_or(&"")
-                .to_string(),
+            content_hash: hash_map.get(sf.path.as_str()).unwrap_or(&"").to_string(),
             editable: StoryFile::infer_editable(&sf.path),
         })
         .collect();
@@ -481,10 +460,7 @@ pub fn build_manifest_from_classification(
         .map(|cf| ContextFile {
             path: cf.path.clone(),
             role: cf.role.clone(),
-            content_hash: hash_map
-                .get(cf.path.as_str())
-                .unwrap_or(&"")
-                .to_string(),
+            content_hash: hash_map.get(cf.path.as_str()).unwrap_or(&"").to_string(),
         })
         .collect();
 

@@ -13,18 +13,24 @@ use eframe::egui::{self, RichText};
 use tokio::sync::Mutex;
 
 use crate::concepts::character_perspective::CharacterPerspective;
-use crate::config::{self, ProjectConfig, LAIRES_DIR};
-use crate::runtime::project_loader::{load_project, LoadedProject, ProjectLoadResult};
+use crate::config::{self, LAIRES_DIR, ProjectConfig};
+use crate::runtime::project_loader::{LoadedProject, ProjectLoadResult, load_project};
 use crate::runtime::story_access::StoryAccess;
 
-use state::{AgentEvent, AgentStatus, AppMode, ChatMessage, ChatRole, GuiRequest, GuiState, RightTab, SessionMode, ToolCallDisplay};
+use state::{
+    AgentEvent, AgentStatus, AppMode, ChatMessage, ChatRole, GuiRequest, GuiState, RightTab,
+    SessionMode, StoryChangeReview, StoryChangeScope, ToolCallDisplay,
+};
 use theme::LairesTheme;
 use welcome::{RecentProjects, WelcomeAction};
 
 /// Infer the default session mode from project config and manifest.
 ///
 /// Priority: explicit config > manifest heuristic (all editable = Workshop, else Consultant).
-fn infer_session_mode(config: &ProjectConfig, manifest: Option<&crate::concepts::manifest::Manifest>) -> SessionMode {
+fn infer_session_mode(
+    config: &ProjectConfig,
+    manifest: Option<&crate::concepts::manifest::Manifest>,
+) -> SessionMode {
     // Check explicit config
     if let Some(ref mode_str) = config.project.default_mode {
         match mode_str.to_lowercase().as_str() {
@@ -55,6 +61,10 @@ pub(crate) struct ProjectData {
     pub config: ProjectConfig,
     /// Accumulated revision brief for Consultant mode.
     pub revision_brief: Option<crate::concepts::revision_brief::RevisionBrief>,
+    /// Pending review scope from story edits that have not yet been re-analyzed.
+    pub pending_change_scope: Option<StoryChangeScope>,
+    /// Latest completed deterministic before/after review from an incremental edit pass.
+    pub latest_change_review: Option<StoryChangeReview>,
 }
 
 /// State for the "New Project" dialog.
@@ -134,6 +144,11 @@ pub(crate) struct ProjectSnapshot {
     context_files: Vec<String>,
     graph_nodes: Vec<panels::graph_view::GraphNodeInfo>,
     graph_edges: Vec<panels::graph_view::GraphEdgeInfo>,
+    pending_scene_ids: std::collections::HashSet<String>,
+    pending_story_files: std::collections::HashSet<String>,
+    pending_scene_count: usize,
+    pending_change_scope: Option<StoryChangeScope>,
+    latest_change_review: Option<StoryChangeReview>,
     /// Brief revision count and rendered markdown (for Brief panel).
     brief_revision_count: usize,
     brief_markdown: String,
@@ -154,9 +169,15 @@ impl GuiApp {
         LairesTheme::configure_fonts(&cc.egui_ctx);
 
         // Build initial snapshot from domain
-        let snapshot = domain.as_ref().and_then(|d| {
-            d.try_lock().ok().map(|proj| build_snapshot(&proj))
-        });
+        let snapshot = domain
+            .as_ref()
+            .and_then(|d| d.try_lock().ok().map(|proj| build_snapshot(&proj)));
+
+        let review_pending = snapshot
+            .as_ref()
+            .map(|snap| snap.pending_scene_count > 0)
+            .unwrap_or(false);
+        let review_status_text = build_review_status_text(snapshot.as_ref());
 
         Self {
             gui_state,
@@ -175,6 +196,17 @@ impl GuiApp {
             new_project_dialog: None,
             settings_dialog: None,
         }
+        .with_review_state(review_pending, review_status_text)
+    }
+
+    fn with_review_state(
+        mut self,
+        review_pending: bool,
+        review_status_text: Option<String>,
+    ) -> Self {
+        self.gui_state.review_pending = review_pending;
+        self.gui_state.review_status_text = review_status_text;
+        self
     }
 
     fn process_agent_events(&mut self) {
@@ -193,7 +225,10 @@ impl GuiApp {
                         result_summary: String::new(),
                     });
                 }
-                AgentEvent::ToolResult { name, result_summary } => {
+                AgentEvent::ToolResult {
+                    name,
+                    result_summary,
+                } => {
                     // Update the matching pending tool call
                     if let Some(tc) = self
                         .pending_tool_calls
@@ -236,6 +271,13 @@ impl GuiApp {
                             self.gui_state.char_count = proj.graph.get_characters().len();
                             self.gui_state.word_count = story.word_count();
                             self.gui_state.graph_needs_rebuild = true;
+                            self.gui_state.review_pending = self
+                                .snapshot
+                                .as_ref()
+                                .map(|snap| snap.pending_scene_count > 0)
+                                .unwrap_or(false);
+                            self.gui_state.review_status_text =
+                                build_review_status_text(self.snapshot.as_ref());
                         }
                     }
                 }
@@ -422,12 +464,7 @@ impl GuiApp {
         let Some(domain) = &self.domain else { return };
         let Ok(proj) = domain.try_lock() else { return };
 
-        let api_key_env = proj
-            .config
-            .llm
-            .api_key_env
-            .clone()
-            .unwrap_or_default();
+        let api_key_env = proj.config.llm.api_key_env.clone().unwrap_or_default();
 
         // Read the current env var value
         let api_key = if !api_key_env.is_empty() {
@@ -509,9 +546,7 @@ impl GuiApp {
                 // API Key value (password field)
                 ui.horizontal(|ui| {
                     ui.label("API Key:");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut dialog.api_key).password(true),
-                    );
+                    ui.add(egui::TextEdit::singleline(&mut dialog.api_key).password(true));
                 });
 
                 // Base URL
@@ -696,7 +731,8 @@ impl GuiApp {
                 // Spawn new agent
                 let agent_domain = domain.clone();
                 self.runtime_handle.spawn(async move {
-                    agent::agent_loop(agent_domain, rx_from_gui, tx_to_gui, provider, skills, mode).await;
+                    agent::agent_loop(agent_domain, rx_from_gui, tx_to_gui, provider, skills, mode)
+                        .await;
                 });
 
                 self.domain = Some(domain);
@@ -838,7 +874,7 @@ impl GuiApp {
     /// Render the project screen (AppMode::Project) — the existing 3-pane layout.
     fn render_project_screen(&mut self, ctx: &egui::Context) {
         // Top navigation bar
-        panels::status_bar::render(ctx, &self.gui_state, &self.theme);
+        panels::status_bar::render(ctx, &self.gui_state, &self.snapshot, &self.theme);
 
         // Check if scan was requested via top bar button
         let top_bar_scan = ctx.memory_mut(|mem| {
@@ -848,8 +884,7 @@ impl GuiApp {
         });
         if top_bar_scan {
             ctx.memory_mut(|mem| {
-                mem.data
-                    .insert_temp(egui::Id::new("scan_requested"), false);
+                mem.data.insert_temp(egui::Id::new("scan_requested"), false);
             });
             self.gui_state.scan_requested = true;
         }
@@ -1092,12 +1127,7 @@ impl GuiApp {
                         }
                     }
                     RightTab::Brief => {
-                        panels::brief::render(
-                            ui,
-                            &self.gui_state,
-                            &self.snapshot,
-                            &self.theme,
-                        );
+                        panels::brief::render(ui, &self.gui_state, &self.snapshot, &self.theme);
                     }
                     RightTab::Lint => {
                         ui.label(
@@ -1125,16 +1155,23 @@ impl eframe::App for GuiApp {
 
         // Handle "switch to welcome" request from status bar click (via ctx memory)
         let switch = ctx.memory_mut(|mem| {
-            mem.data.get_temp::<bool>(egui::Id::new("switch_to_welcome")).unwrap_or(false)
+            mem.data
+                .get_temp::<bool>(egui::Id::new("switch_to_welcome"))
+                .unwrap_or(false)
         });
         if switch {
-            ctx.memory_mut(|mem| mem.data.insert_temp(egui::Id::new("switch_to_welcome"), false));
+            ctx.memory_mut(|mem| {
+                mem.data
+                    .insert_temp(egui::Id::new("switch_to_welcome"), false)
+            });
             self.gui_state.app_mode = AppMode::Welcome;
         }
 
         // Handle "open settings" request from status bar gear icon (via ctx memory)
         let open_settings = ctx.memory_mut(|mem| {
-            mem.data.get_temp::<bool>(egui::Id::new("open_settings")).unwrap_or(false)
+            mem.data
+                .get_temp::<bool>(egui::Id::new("open_settings"))
+                .unwrap_or(false)
         });
         if open_settings {
             ctx.memory_mut(|mem| mem.data.insert_temp(egui::Id::new("open_settings"), false));
@@ -1143,7 +1180,9 @@ impl eframe::App for GuiApp {
 
         // Handle mode switch from status bar badge (via ctx memory bool flag)
         let mode_switch_requested = ctx.memory_mut(|mem| {
-            mem.data.get_temp::<bool>(egui::Id::new("switch_mode")).unwrap_or(false)
+            mem.data
+                .get_temp::<bool>(egui::Id::new("switch_mode"))
+                .unwrap_or(false)
         });
         if mode_switch_requested {
             ctx.memory_mut(|mem| mem.data.insert_temp(egui::Id::new("switch_mode"), false));
@@ -1268,6 +1307,17 @@ fn build_snapshot(proj: &ProjectData) -> ProjectSnapshot {
         }
     }
 
+    let pending_change_scope = proj.pending_change_scope.clone();
+    let pending_scene_ids: std::collections::HashSet<String> = pending_change_scope
+        .as_ref()
+        .map(|scope| scope.changed_scene_ids.iter().cloned().collect())
+        .unwrap_or_default();
+    let pending_story_files: std::collections::HashSet<String> = pending_change_scope
+        .as_ref()
+        .map(|scope| scope.changed_files.iter().cloned().collect())
+        .unwrap_or_default();
+    let pending_scene_count = pending_scene_ids.len();
+
     let story_files = proj
         .manifest
         .as_ref()
@@ -1290,49 +1340,85 @@ fn build_snapshot(proj: &ProjectData) -> ProjectSnapshot {
                 use panels::graph_view::NodeDetail;
 
                 let (label, detail) = match node {
-                    GraphNode::Character { name, aliases, description, .. } => {
-                        (name.clone(), NodeDetail::Character {
+                    GraphNode::Character {
+                        name,
+                        aliases,
+                        description,
+                        ..
+                    } => (
+                        name.clone(),
+                        NodeDetail::Character {
                             name: name.clone(),
                             aliases: aliases.clone(),
                             description: description.clone(),
-                        })
-                    }
-                    GraphNode::Objective { character_id, scope, description, evidence, confidence, status, .. } => {
+                        },
+                    ),
+                    GraphNode::Objective {
+                        character_id,
+                        scope,
+                        description,
+                        evidence,
+                        confidence,
+                        status,
+                        ..
+                    } => {
                         let label = if description.len() > 30 {
                             format!("{}...", &description[..27])
                         } else {
                             description.clone()
                         };
-                        (label, NodeDetail::Objective {
-                            character_id: character_id.clone(),
-                            scope: format!("{:?}", scope),
-                            description: description.clone(),
-                            evidence: evidence.clone(),
-                            confidence: *confidence,
-                            status: format!("{:?}", status),
-                        })
+                        (
+                            label,
+                            NodeDetail::Objective {
+                                character_id: character_id.clone(),
+                                scope: format!("{:?}", scope),
+                                description: description.clone(),
+                                evidence: evidence.clone(),
+                                confidence: *confidence,
+                                status: format!("{:?}", status),
+                            },
+                        )
                     }
-                    GraphNode::Scene { id, title, summary, characters_present, location, time, file_path, .. } => {
+                    GraphNode::Scene {
+                        id,
+                        title,
+                        summary,
+                        characters_present,
+                        location,
+                        time,
+                        file_path,
+                        ..
+                    } => {
                         let label = title.clone().unwrap_or_else(|| id.clone());
-                        (label, NodeDetail::Scene {
-                            title: title.clone(),
-                            summary: summary.clone(),
-                            characters_present: characters_present.clone(),
-                            location: location.clone(),
-                            time: time.clone(),
-                            file_path: file_path.clone(),
-                        })
+                        (
+                            label,
+                            NodeDetail::Scene {
+                                title: title.clone(),
+                                summary: summary.clone(),
+                                characters_present: characters_present.clone(),
+                                location: location.clone(),
+                                time: time.clone(),
+                                file_path: file_path.clone(),
+                            },
+                        )
                     }
-                    GraphNode::Conflict { description, objectives, .. } => {
+                    GraphNode::Conflict {
+                        description,
+                        objectives,
+                        ..
+                    } => {
                         let label = if description.len() > 30 {
                             format!("{}...", &description[..27])
                         } else {
                             description.clone()
                         };
-                        (label, NodeDetail::Conflict {
-                            description: description.clone(),
-                            objectives: objectives.clone(),
-                        })
+                        (
+                            label,
+                            NodeDetail::Conflict {
+                                description: description.clone(),
+                                objectives: objectives.clone(),
+                            },
+                        )
                     }
                 };
                 panels::graph_view::SnapshotNode {
@@ -1379,6 +1465,11 @@ fn build_snapshot(proj: &ProjectData) -> ProjectSnapshot {
         context_files,
         graph_nodes,
         graph_edges,
+        pending_scene_count,
+        pending_scene_ids,
+        pending_story_files,
+        pending_change_scope,
+        latest_change_review: proj.latest_change_review.clone(),
         brief_revision_count: proj
             .revision_brief
             .as_ref()
@@ -1406,6 +1497,29 @@ fn into_gui_project_data(project: LoadedProject) -> ProjectData {
         project_root: project.project_root,
         config: project.config,
         revision_brief: Some(crate::concepts::revision_brief::RevisionBrief::new(&title)),
+        pending_change_scope: None,
+        latest_change_review: None,
+    }
+}
+
+fn build_review_status_text(snapshot: Option<&ProjectSnapshot>) -> Option<String> {
+    let snap = snapshot?;
+    if snap.pending_scene_count == 0 {
+        return None;
+    }
+
+    if let Some(scope) = &snap.pending_change_scope {
+        Some(scope.summary())
+    } else {
+        Some(format!(
+            "Review pending for {} {}",
+            snap.pending_scene_count,
+            if snap.pending_scene_count == 1 {
+                "scene"
+            } else {
+                "scenes"
+            }
+        ))
     }
 }
 
@@ -1469,7 +1583,8 @@ pub async fn run_gui(project_path: Option<PathBuf>) -> anyhow::Result<()> {
                 // Spawn agent on the current tokio runtime
                 let agent_domain = domain.clone();
                 tokio::spawn(async move {
-                    agent::agent_loop(agent_domain, rx_from_gui, tx_to_gui, provider, skills, mode).await;
+                    agent::agent_loop(agent_domain, rx_from_gui, tx_to_gui, provider, skills, mode)
+                        .await;
                 });
 
                 // Update recents

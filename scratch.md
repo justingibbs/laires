@@ -22,7 +22,9 @@ laires scan
 - phase-4
 - refactor-codex
 - dual-mode
-- gui-refresh
+- gui-refresh (deleted)
+- phase-5
+- codex-loop (to be implemented)
 
 
 

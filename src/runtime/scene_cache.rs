@@ -45,7 +45,9 @@ impl SceneCache {
     }
 
     pub fn save_to_project(&self, project_root: &Path) -> anyhow::Result<()> {
-        let path = project_root.join(crate::config::LAIRES_DIR).join(SCENES_FILE);
+        let path = project_root
+            .join(crate::config::LAIRES_DIR)
+            .join(SCENES_FILE);
         let json = serde_json::to_string_pretty(self)?;
         std::fs::write(path, json)?;
         Ok(())
@@ -53,7 +55,9 @@ impl SceneCache {
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn load_from_project(project_root: &Path) -> anyhow::Result<Self> {
-        let path = project_root.join(crate::config::LAIRES_DIR).join(SCENES_FILE);
+        let path = project_root
+            .join(crate::config::LAIRES_DIR)
+            .join(SCENES_FILE);
         let content = std::fs::read_to_string(path)?;
         let cache = serde_json::from_str(&content)?;
         Ok(cache)
@@ -62,16 +66,19 @@ impl SceneCache {
 
 #[cfg(test)]
 mod tests {
+    use super::SceneCache;
     use crate::concepts::file_buffer_manager::FileBufferManager;
     use crate::concepts::manifest::{Manifest, ManifestMeta, StoryFile};
     use crate::concepts::scene_map::{ParseMode, SceneMap};
-    use super::SceneCache;
 
     #[test]
     fn round_trips_single_file_cache() {
         let tmp = tempfile::tempdir().unwrap();
         let mut scene_map = SceneMap::new(ParseMode::Prose);
-        scene_map.full_reindex("## Scene 1\n\nEnough words for a valid scene here.", "story.md");
+        scene_map.full_reindex(
+            "## Scene 1\n\nEnough words for a valid scene here.",
+            "story.md",
+        );
 
         let cache = SceneCache::from_single_file("story.md".to_string(), &scene_map);
         cache.save_to_project(tmp.path()).unwrap_err();
@@ -182,8 +189,14 @@ mod tests {
 
         assert_eq!(loaded.files.len(), 2);
         assert_eq!(loaded.files[0].file_path, "chapter-1.md");
-        assert_eq!(loaded.files[0].scene_map.list_scenes()[0].id, first_scene_id);
+        assert_eq!(
+            loaded.files[0].scene_map.list_scenes()[0].id,
+            first_scene_id
+        );
         assert_eq!(loaded.files[1].file_path, "chapter-2.md");
-        assert_eq!(loaded.files[1].scene_map.list_scenes()[0].id, second_scene_id);
+        assert_eq!(
+            loaded.files[1].scene_map.list_scenes()[0].id,
+            second_scene_id
+        );
     }
 }

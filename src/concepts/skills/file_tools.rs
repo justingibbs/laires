@@ -15,9 +15,7 @@ impl Skills {
         let pattern = args["pattern"].as_str().unwrap_or("");
         let matches = match story.search(pattern) {
             Ok(hits) => hits,
-            Err(e) => {
-                return serde_json::json!({ "error": format!("Invalid regex: {e}") })
-            }
+            Err(e) => return serde_json::json!({ "error": format!("Invalid regex: {e}") }),
         };
 
         serde_json::json!({
@@ -56,10 +54,7 @@ impl Skills {
         }
     }
 
-    pub(super) fn exec_list_scenes(
-        &self,
-        story: &StoryAccess<'_>,
-    ) -> serde_json::Value {
+    pub(super) fn exec_list_scenes(&self, story: &StoryAccess<'_>) -> serde_json::Value {
         let scenes: Vec<serde_json::Value> = story
             .list_scenes()
             .into_iter()
@@ -100,7 +95,9 @@ impl Skills {
     ) -> serde_json::Value {
         let manifest = match manifest {
             Some(m) => m,
-            None => return serde_json::json!({ "error": "No manifest loaded. Run `laires scan` first." }),
+            None => {
+                return serde_json::json!({ "error": "No manifest loaded. Run `laires scan` first." });
+            }
         };
         let project_root = match project_root {
             Some(r) => r,
@@ -123,10 +120,7 @@ impl Skills {
         match context_file {
             Some(cf) => {
                 let full_path = project_root.join(&cf.path);
-                let ext = full_path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("");
+                let ext = full_path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
                 let content = if ext == "docx" {
                     match crate::concepts::docx::extract_text_from_docx(&full_path) {
@@ -134,7 +128,7 @@ impl Skills {
                         Err(e) => {
                             return serde_json::json!({
                                 "error": format!("Failed to read {}: {e}", cf.path)
-                            })
+                            });
                         }
                     }
                 } else {
@@ -143,7 +137,7 @@ impl Skills {
                         Err(e) => {
                             return serde_json::json!({
                                 "error": format!("Failed to read {}: {e}", cf.path)
-                            })
+                            });
                         }
                     }
                 };
@@ -164,13 +158,12 @@ impl Skills {
         }
     }
 
-    pub(super) fn exec_list_files(
-        &self,
-        manifest: Option<&Manifest>,
-    ) -> serde_json::Value {
+    pub(super) fn exec_list_files(&self, manifest: Option<&Manifest>) -> serde_json::Value {
         let manifest = match manifest {
             Some(m) => m,
-            None => return serde_json::json!({ "error": "No manifest loaded. Run `laires scan` first." }),
+            None => {
+                return serde_json::json!({ "error": "No manifest loaded. Run `laires scan` first." });
+            }
         };
 
         let story_files: Vec<serde_json::Value> = manifest

@@ -25,11 +25,7 @@ fn list_briefs(briefs_dir: &Path) -> anyhow::Result<()> {
 
     let mut entries: Vec<_> = std::fs::read_dir(briefs_dir)?
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| ext == "md")
-        })
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
         .collect();
 
     if entries.is_empty() {
@@ -69,11 +65,7 @@ fn show_latest_brief(briefs_dir: &Path) -> anyhow::Result<()> {
 
     let mut entries: Vec<_> = std::fs::read_dir(briefs_dir)?
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| ext == "md")
-        })
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
         .collect();
 
     if entries.is_empty() {

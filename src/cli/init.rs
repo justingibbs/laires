@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::config::{ProjectConfig, LAIRES_DIR};
+use crate::config::{LAIRES_DIR, ProjectConfig};
 
 pub fn run(title: &str, fountain: bool) -> anyhow::Result<()> {
     let project_dir = std::env::current_dir()?;
@@ -13,10 +13,7 @@ pub fn init_at(project_dir: &Path, title: &str, fountain: bool) -> anyhow::Resul
     let laires_dir = project_dir.join(LAIRES_DIR);
 
     if laires_dir.exists() {
-        anyhow::bail!(
-            "Project already initialized at {}",
-            project_dir.display()
-        );
+        anyhow::bail!("Project already initialized at {}", project_dir.display());
     }
 
     // Create .laires/ directory structure
@@ -54,18 +51,12 @@ pub fn init_at(project_dir: &Path, title: &str, fountain: bool) -> anyhow::Resul
     // Create .gitignore for the .laires directory
     let gitignore_path = project_dir.join(".gitignore");
     if !gitignore_path.exists() {
-        fs::write(
-            &gitignore_path,
-            ".laires/cache/\n.env\n",
-        )?;
+        fs::write(&gitignore_path, ".laires/cache/\n.env\n")?;
     } else {
         // Append if .laires/cache/ isn't already in .gitignore
         let content = fs::read_to_string(&gitignore_path)?;
         if !content.contains(".laires/cache/") {
-            fs::write(
-                &gitignore_path,
-                format!("{content}\n.laires/cache/\n"),
-            )?;
+            fs::write(&gitignore_path, format!("{content}\n.laires/cache/\n"))?;
         }
         // Re-read in case we just appended above
         let content = fs::read_to_string(&gitignore_path)?;

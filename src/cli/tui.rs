@@ -5,17 +5,17 @@ use std::time::Duration;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
-    Frame, Terminal,
 };
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 use crate::concepts::canvas::Canvas;
 use crate::concepts::character_perspective::CharacterPerspective;
@@ -28,7 +28,7 @@ use crate::concepts::skills::{SkillContext, SkillSetContext};
 use crate::concepts::text_buffer::TextBuffer;
 use crate::config::{self, LAIRES_DIR, OVERRIDES_FILE, PERSPECTIVES_CACHE_DIR};
 use crate::runtime::agent_session::{
-    truncate_json, AgentSession, ChatTurnError, ChatTurnRequest, SessionEvent,
+    AgentSession, ChatTurnError, ChatTurnRequest, SessionEvent, truncate_json,
 };
 use crate::runtime::project_loader::load_project;
 use crate::runtime::story_access::StoryAccess;
@@ -130,7 +130,12 @@ pub async fn run_tui() -> anyhow::Result<()> {
         .join(PERSPECTIVES_CACHE_DIR)
         .join("perspectives.json");
 
-    let privacy = if provider.is_local() { "Local" } else { "Cloud" }.to_string();
+    let privacy = if provider.is_local() {
+        "Local"
+    } else {
+        "Cloud"
+    }
+    .to_string();
     let model_name = provider.model_name().to_string();
     let title = config.project.title.clone();
     let story = StoryAccess::new(&text_buffer, &scene_map, file_buffer_manager.as_ref());
@@ -212,10 +217,7 @@ pub async fn run_tui() -> anyhow::Result<()> {
                     prepared,
                     |tool_calls, provider, skills, runtime| {
                         Box::pin(execute_tui_tool_calls(
-                            runtime,
-                            tool_calls,
-                            provider,
-                            skills,
+                            runtime, tool_calls, provider, skills,
                         ))
                     },
                     |event| match event {
@@ -309,8 +311,7 @@ pub async fn run_tui() -> anyhow::Result<()> {
                             if a.overlay.is_some() {
                                 match key.code {
                                     KeyCode::Up => {
-                                        a.overlay_scroll =
-                                            a.overlay_scroll.saturating_sub(1);
+                                        a.overlay_scroll = a.overlay_scroll.saturating_sub(1);
                                     }
                                     KeyCode::Down => {
                                         let max = a.overlay_content.len().saturating_sub(1);
@@ -318,8 +319,7 @@ pub async fn run_tui() -> anyhow::Result<()> {
                                             a.overlay_scroll.saturating_add(1).min(max);
                                     }
                                     KeyCode::PageUp => {
-                                        a.overlay_scroll =
-                                            a.overlay_scroll.saturating_sub(10);
+                                        a.overlay_scroll = a.overlay_scroll.saturating_sub(10);
                                     }
                                     KeyCode::PageDown => {
                                         let max = a.overlay_content.len().saturating_sub(1);
@@ -343,10 +343,7 @@ pub async fn run_tui() -> anyhow::Result<()> {
                                             let input: String =
                                                 a.chat.input_buffer.drain(..).collect();
                                             let input = input.trim().to_string();
-                                            if input == "quit"
-                                                || input == "exit"
-                                                || input == "/q"
-                                            {
+                                            if input == "quit" || input == "exit" || input == "/q" {
                                                 a.should_quit = true;
                                             } else {
                                                 a.chat.history.push(ChatMessage {
@@ -452,7 +449,11 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         AgentStatus::ToolCall(name) => format!("Calling: {name}"),
         AgentStatus::Streaming => "Streaming...".to_string(),
     };
-    let story = StoryAccess::new(&app.text_buffer, &app.scene_map, app.file_buffer_manager.as_ref());
+    let story = StoryAccess::new(
+        &app.text_buffer,
+        &app.scene_map,
+        app.file_buffer_manager.as_ref(),
+    );
 
     if app.status_expanded {
         // Expanded: multi-line status
@@ -467,10 +468,8 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
             .split(area);
 
         // Row 0: separator
-        let sep = Paragraph::new(Line::from(
-            "─".repeat(area.width as usize),
-        ))
-        .style(Style::default().fg(Color::DarkGray).bg(Color::DarkGray));
+        let sep = Paragraph::new(Line::from("─".repeat(area.width as usize)))
+            .style(Style::default().fg(Color::DarkGray).bg(Color::DarkGray));
         f.render_widget(sep, rows[0]);
 
         // Row 1: provider + status
@@ -492,15 +491,13 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         let char_count = app.graph.get_characters().len();
         let obj_count = app.graph.get_objectives().len();
         let conflict_count = app.graph.get_conflicts().len();
-        let line2 = Line::from(vec![
-            Span::styled(
-                format!(
-                    " Scenes: {} | Characters: {} | Objectives: {} | Conflicts: {}",
-                    scene_count, char_count, obj_count, conflict_count
-                ),
-                Style::default().fg(Color::White),
+        let line2 = Line::from(vec![Span::styled(
+            format!(
+                " Scenes: {} | Characters: {} | Objectives: {} | Conflicts: {}",
+                scene_count, char_count, obj_count, conflict_count
             ),
-        ]);
+            Style::default().fg(Color::White),
+        )]);
         let bar2 = Paragraph::new(line2).style(Style::default().bg(Color::DarkGray));
         f.render_widget(bar2, rows[2]);
 
@@ -512,15 +509,13 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
             .as_ref()
             .map(|m| m.story_files.len())
             .unwrap_or(0);
-        let line3 = Line::from(vec![
-            Span::styled(
-                format!(
-                    " Words: {} | Pending: {} | Files: {} | Ctrl+/ to collapse",
-                    word_count, pending_count, file_count
-                ),
-                Style::default().fg(Color::DarkGray),
+        let line3 = Line::from(vec![Span::styled(
+            format!(
+                " Words: {} | Pending: {} | Files: {} | Ctrl+/ to collapse",
+                word_count, pending_count, file_count
             ),
-        ]);
+            Style::default().fg(Color::DarkGray),
+        )]);
         let bar3 = Paragraph::new(line3).style(Style::default().bg(Color::DarkGray));
         f.render_widget(bar3, rows[3]);
     } else {
@@ -555,8 +550,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(right, Style::default().fg(Color::Yellow)),
         ]);
 
-        let bar = Paragraph::new(status_line)
-            .style(Style::default().bg(Color::DarkGray));
+        let bar = Paragraph::new(status_line).style(Style::default().bg(Color::DarkGray));
         f.render_widget(bar, area);
     }
 }
@@ -593,7 +587,12 @@ fn draw_chat_pane(f: &mut Frame, app: &App, area: Rect) {
                 "assistant" => ("  ", Style::default().fg(Color::White)),
                 "tool" => ("  ", Style::default().fg(Color::DarkGray)),
                 "error" => ("! ", Style::default().fg(Color::Red)),
-                "system" => ("  ", Style::default().fg(Color::Cyan).add_modifier(Modifier::ITALIC)),
+                "system" => (
+                    "  ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::ITALIC),
+                ),
                 _ => ("  ", Style::default()),
             };
 
@@ -662,10 +661,12 @@ fn draw_canvas_pane(f: &mut Frame, app: &App, area: Rect) {
 
     // Render text content with line numbers
     let full_text = app.text_buffer.read_all();
-    let visible_start = app
-        .canvas
-        .scroll_offset()
-        .min(full_text.lines().count().saturating_sub(inner.height as usize));
+    let visible_start = app.canvas.scroll_offset().min(
+        full_text
+            .lines()
+            .count()
+            .saturating_sub(inner.height as usize),
+    );
     let lines: Vec<Line> = full_text
         .lines()
         .enumerate()
@@ -714,11 +715,7 @@ fn draw_overlay(f: &mut Frame, app: &App, kind: &OverlayKind, area: Rect) {
 
     let total = app.overlay_content.len();
     let scroll_info = if total > 0 {
-        format!(
-            " {title}({}/{}) [Esc] ",
-            app.overlay_scroll + 1,
-            total
-        )
+        format!(" {title}({}/{}) [Esc] ", app.overlay_scroll + 1, total)
     } else {
         format!(" {title}[Esc] ")
     };
@@ -745,7 +742,9 @@ fn draw_overlay(f: &mut Frame, app: &App, kind: &OverlayKind, area: Rect) {
 }
 
 fn toggle_overlay(app: &mut App, kind: OverlayKind) {
-    if app.overlay.as_ref().map(|k| std::mem::discriminant(k)) == Some(std::mem::discriminant(&kind)) {
+    if app.overlay.as_ref().map(|k| std::mem::discriminant(k))
+        == Some(std::mem::discriminant(&kind))
+    {
         app.overlay = None;
         app.overlay_content.clear();
         app.overlay_scroll = 0;
@@ -785,10 +784,7 @@ fn toggle_overlay(app: &mut App, kind: OverlayKind) {
             ));
             lines.push("-".repeat(55));
             for (i, scene) in app.scene_map.list_scenes().iter().enumerate() {
-                let text = app
-                    .text_buffer
-                    .read(scene.byte_range())
-                    .unwrap_or_default();
+                let text = app.text_buffer.read(scene.byte_range()).unwrap_or_default();
                 let wc = text.split_whitespace().count();
                 let analysis = app.graph.get_scene_analysis(&scene.id);
                 let density = analysis
@@ -809,9 +805,7 @@ fn toggle_overlay(app: &mut App, kind: OverlayKind) {
             }
             lines
         }
-        OverlayKind::FileExplorer => {
-            build_file_explorer_content(app)
-        }
+        OverlayKind::FileExplorer => build_file_explorer_content(app),
     };
 
     app.overlay = Some(kind);
@@ -843,12 +837,7 @@ fn build_file_explorer_content(app: &App) -> Vec<String> {
                             entry.scene_map.scene_count(),
                         )
                     })
-                    .unwrap_or_else(|| {
-                        (
-                            app.text_buffer.word_count(),
-                            app.scene_map.scene_count(),
-                        )
-                    });
+                    .unwrap_or_else(|| (app.text_buffer.word_count(), app.scene_map.scene_count()));
                 let path = if sf.path.len() > 38 {
                     format!("..{}", &sf.path[sf.path.len() - 36..])
                 } else {
@@ -873,11 +862,7 @@ fn build_file_explorer_content(app: &App) -> Vec<String> {
                     } else {
                         cf.path.clone()
                     };
-                    lines.push(format!(
-                        "{:<40} {:<12}",
-                        path,
-                        cf.role.to_string()
-                    ));
+                    lines.push(format!("{:<40} {:<12}", path, cf.role.to_string()));
                 }
             }
 
@@ -1012,20 +997,20 @@ mod tests {
             status_expanded: false,
         };
 
-        terminal
-            .draw(|f| draw_ui(f, &app))
-            .unwrap();
+        terminal.draw(|f| draw_ui(f, &app)).unwrap();
 
         // Verify terminal rendered without panic
         let buffer = terminal.backend().buffer().clone();
-        let content: String = buffer
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
 
-        assert!(content.contains("Local"), "Status bar should show privacy indicator");
-        assert!(content.contains("test-model"), "Status bar should show model name");
+        assert!(
+            content.contains("Local"),
+            "Status bar should show privacy indicator"
+        );
+        assert!(
+            content.contains("test-model"),
+            "Status bar should show model name"
+        );
     }
 
     #[test]
@@ -1191,7 +1176,10 @@ mod tests {
         ] {
             toggle_overlay(&mut app, kind.clone());
             assert!(app.overlay.is_some(), "Overlay should be active");
-            assert!(!app.overlay_content.is_empty(), "Overlay content should be populated");
+            assert!(
+                !app.overlay_content.is_empty(),
+                "Overlay content should be populated"
+            );
             assert_eq!(app.overlay_scroll, 0, "Scroll should reset on toggle");
 
             // Toggle off
@@ -1254,7 +1242,11 @@ mod tests {
         let mut app = make_test_app();
         toggle_overlay(&mut app, OverlayKind::FileExplorer);
 
-        assert!(app.overlay_content.iter().any(|l| l.contains("No manifest")));
+        assert!(
+            app.overlay_content
+                .iter()
+                .any(|l| l.contains("No manifest"))
+        );
     }
 
     #[test]
@@ -1312,21 +1304,21 @@ mod tests {
         let mut app = make_test_app();
         toggle_overlay(&mut app, OverlayKind::Graph);
 
-        terminal
-            .draw(|f| draw_ui(f, &app))
-            .unwrap();
+        terminal.draw(|f| draw_ui(f, &app)).unwrap();
 
         let buffer = terminal.backend().buffer().clone();
-        let content: String = buffer
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
 
         // Chat pane should still be visible
-        assert!(content.contains("Chat"), "Chat pane should be visible with overlay");
+        assert!(
+            content.contains("Chat"),
+            "Chat pane should be visible with overlay"
+        );
         // Overlay title should appear
-        assert!(content.contains("Narrative Graph"), "Overlay title should be visible");
+        assert!(
+            content.contains("Narrative Graph"),
+            "Overlay title should be visible"
+        );
     }
 
     #[test]
@@ -1337,19 +1329,19 @@ mod tests {
         let mut app = make_test_app();
         app.status_expanded = true;
 
-        terminal
-            .draw(|f| draw_ui(f, &app))
-            .unwrap();
+        terminal.draw(|f| draw_ui(f, &app)).unwrap();
 
         let buffer = terminal.backend().buffer().clone();
-        let content: String = buffer
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
 
-        assert!(content.contains("Scenes:"), "Expanded status should show scene count");
-        assert!(content.contains("Words:"), "Expanded status should show word count");
+        assert!(
+            content.contains("Scenes:"),
+            "Expanded status should show scene count"
+        );
+        assert!(
+            content.contains("Words:"),
+            "Expanded status should show word count"
+        );
     }
 
     #[test]
@@ -1374,9 +1366,18 @@ mod tests {
         toggle_overlay(&mut app, OverlayKind::Pacing);
 
         // Should have header + separator + 2 scenes = 4 lines
-        assert!(app.overlay_content.len() >= 4, "Pacing should have header + scenes");
-        assert!(app.overlay_content[0].contains("Title"), "Should have column headers");
-        assert!(app.overlay_content[1].contains("-"), "Should have separator line");
+        assert!(
+            app.overlay_content.len() >= 4,
+            "Pacing should have header + scenes"
+        );
+        assert!(
+            app.overlay_content[0].contains("Title"),
+            "Should have column headers"
+        );
+        assert!(
+            app.overlay_content[1].contains("-"),
+            "Should have separator line"
+        );
     }
 
     #[test]
@@ -1385,6 +1386,9 @@ mod tests {
         toggle_overlay(&mut app, OverlayKind::Graph);
 
         let joined = app.overlay_content.join("\n");
-        assert!(joined.contains("Narrative Graph"), "Should contain graph summary header");
+        assert!(
+            joined.contains("Narrative Graph"),
+            "Should contain graph summary header"
+        );
     }
 }

@@ -65,8 +65,7 @@ impl RecentProjects {
 
     /// Remove entries where `.laires/` no longer exists.
     pub fn prune(&mut self) {
-        self.projects
-            .retain(|p| p.path.join(".laires").is_dir());
+        self.projects.retain(|p| p.path.join(".laires").is_dir());
     }
 
     fn file_path() -> Option<PathBuf> {
@@ -125,20 +124,16 @@ pub fn render_welcome(
                 ui.add_space((avail - total) / 2.0);
             }
 
-            let open_btn = egui::Button::new(
-                RichText::new("Open Project").size(15.0),
-            )
-            .min_size(egui::vec2(button_width, 40.0));
+            let open_btn = egui::Button::new(RichText::new("Open Project").size(15.0))
+                .min_size(egui::vec2(button_width, 40.0));
             if ui.add(open_btn).clicked() {
                 action = WelcomeAction::OpenProject;
             }
 
             ui.add_space(spacing);
 
-            let new_btn = egui::Button::new(
-                RichText::new("New Project").size(15.0),
-            )
-            .min_size(egui::vec2(button_width, 40.0));
+            let new_btn = egui::Button::new(RichText::new("New Project").size(15.0))
+                .min_size(egui::vec2(button_width, 40.0));
             if ui.add(new_btn).clicked() {
                 action = WelcomeAction::NewProject;
             }

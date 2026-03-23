@@ -146,7 +146,10 @@ impl FileBufferManager {
 
     /// Total word count across all story files.
     pub fn total_word_count(&self) -> usize {
-        self.entries.iter().map(|e| e.text_buffer.word_count()).sum()
+        self.entries
+            .iter()
+            .map(|e| e.text_buffer.word_count())
+            .sum()
     }
 
     /// Total scene count across all files.
@@ -272,7 +275,8 @@ mod tests {
         // Both files contain "chapter" in their content
         let file_paths: Vec<&str> = hits.iter().map(|h| h.file_path.as_str()).collect();
         assert!(
-            file_paths.contains(&"chapter-1.md") || file_paths.contains(&"chapter-2.md")
+            file_paths.contains(&"chapter-1.md")
+                || file_paths.contains(&"chapter-2.md")
                 || hits.is_empty(),
             "Search should find hits or gracefully return empty"
         );

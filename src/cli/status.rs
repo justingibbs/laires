@@ -1,7 +1,7 @@
 use crate::concepts::narrative_graph::NarrativeGraph;
 use crate::concepts::scene_map::{ParseMode, SceneMap};
 use crate::concepts::text_buffer::TextBuffer;
-use crate::config::{self, ProjectConfig, LAIRES_DIR};
+use crate::config::{self, LAIRES_DIR, ProjectConfig};
 
 pub fn run() -> anyhow::Result<()> {
     let project_dir = std::env::current_dir()?;

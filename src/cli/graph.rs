@@ -22,25 +22,20 @@ pub fn run(character: Option<&str>, json: bool) -> anyhow::Result<()> {
     match character {
         Some(name) => {
             // Find character and show their arc
-            let char_id = graph
-                .get_characters()
-                .iter()
-                .find_map(|c| {
-                    if let crate::concepts::narrative_graph::GraphNode::Character {
-                        id,
-                        name: n,
-                        ..
-                    } = c
-                    {
-                        if n.eq_ignore_ascii_case(name) {
-                            Some(id.clone())
-                        } else {
-                            None
-                        }
+            let char_id = graph.get_characters().iter().find_map(|c| {
+                if let crate::concepts::narrative_graph::GraphNode::Character {
+                    id, name: n, ..
+                } = c
+                {
+                    if n.eq_ignore_ascii_case(name) {
+                        Some(id.clone())
                     } else {
                         None
                     }
-                });
+                } else {
+                    None
+                }
+            });
 
             match char_id {
                 Some(id) => {
@@ -50,10 +45,7 @@ pub fn run(character: Option<&str>, json: bool) -> anyhow::Result<()> {
                         println!("  No objectives tracked yet.");
                     } else {
                         for state in &arc {
-                            println!(
-                                "  [{:?}] {}",
-                                state.status, state.description
-                            );
+                            println!("  [{:?}] {}", state.status, state.description);
                             if !state.scene_id.is_empty() {
                                 println!("    in scene: {}", state.scene_id);
                             }

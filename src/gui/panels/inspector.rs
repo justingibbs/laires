@@ -1,9 +1,9 @@
 use eframe::egui::{self, Color32, CornerRadius, RichText, Vec2};
 
+use crate::gui::ProjectSnapshot;
 use crate::gui::panels::graph_view::NodeDetail;
 use crate::gui::state::GuiState;
 use crate::gui::theme::LairesTheme;
-use crate::gui::ProjectSnapshot;
 
 const SECTION_SPACING: f32 = 12.0;
 const BADGE_RADIUS: u8 = 4;
@@ -33,7 +33,11 @@ pub fn render(
             // Close button
             ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
                 if ui
-                    .small_button(RichText::new("\u{2715}").size(12.0).color(theme.text_secondary))
+                    .small_button(
+                        RichText::new("\u{2715}")
+                            .size(12.0)
+                            .color(theme.text_secondary),
+                    )
                     .clicked()
                 {
                     state.selected_node_id = None;
@@ -116,16 +120,10 @@ fn render_type_badge(ui: &mut egui::Ui, node_type: &str, theme: &LairesTheme) {
     ui.horizontal(|ui| {
         // Colored dot
         let (dot_rect, _) = ui.allocate_exact_size(Vec2::splat(10.0), egui::Sense::hover());
-        ui.painter()
-            .circle_filled(dot_rect.center(), 4.0, color);
+        ui.painter().circle_filled(dot_rect.center(), 4.0, color);
 
         // Type label
-        ui.label(
-            RichText::new(label)
-                .size(10.0)
-                .strong()
-                .color(color),
-        );
+        ui.label(RichText::new(label).size(10.0).strong().color(color));
     });
 }
 
@@ -147,11 +145,7 @@ fn render_character(
 
     if let Some(desc) = description {
         render_field_label(ui, "Description", theme);
-        ui.label(
-            RichText::new(desc)
-                .size(13.0)
-                .color(theme.text_primary),
-        );
+        ui.label(RichText::new(desc).size(13.0).color(theme.text_primary));
     }
 }
 
@@ -201,7 +195,11 @@ fn render_objective(
     ui.add_space(8.0);
 
     // Confidence bar
-    render_field_label(ui, &format!("Confidence: {:.0}%", confidence * 100.0), theme);
+    render_field_label(
+        ui,
+        &format!("Confidence: {:.0}%", confidence * 100.0),
+        theme,
+    );
     let bar_width = ui.available_width().min(200.0);
     let bar_height = 6.0;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(bar_width, bar_height), egui::Sense::hover());
@@ -261,11 +259,7 @@ fn render_scene(
     // Summary
     if !summary.is_empty() {
         render_field_label(ui, "Summary", theme);
-        ui.label(
-            RichText::new(summary)
-                .size(13.0)
-                .color(theme.text_primary),
-        );
+        ui.label(RichText::new(summary).size(13.0).color(theme.text_primary));
         ui.add_space(8.0);
     }
 
@@ -311,11 +305,7 @@ fn render_scene(
                     state.selected_node_id = Some(char_id.clone());
                 }
             } else {
-                ui.label(
-                    RichText::new(char_id)
-                        .size(12.0)
-                        .color(theme.text_primary),
-                );
+                ui.label(RichText::new(char_id).size(12.0).color(theme.text_primary));
             }
         }
     }
@@ -347,11 +337,7 @@ fn render_conflict(
                     state.selected_node_id = Some(obj_id.clone());
                 }
             } else {
-                ui.label(
-                    RichText::new(obj_id)
-                        .size(12.0)
-                        .color(theme.text_primary),
-                );
+                ui.label(RichText::new(obj_id).size(12.0).color(theme.text_primary));
             }
         }
     }
@@ -439,12 +425,8 @@ fn render_connections(
             if let Some(source_node) = snapshot.graph_nodes.iter().find(|n| n.id == *source_id) {
                 ui.horizontal(|ui| {
                     ui.add_space(12.0);
-                    if render_clickable_node(
-                        ui,
-                        &source_node.label,
-                        &source_node.node_type,
-                        theme,
-                    ) {
+                    if render_clickable_node(ui, &source_node.label, &source_node.node_type, theme)
+                    {
                         state.selected_node_id = Some(source_id.to_string());
                     }
                 });
@@ -476,19 +458,15 @@ fn render_clickable_node(
     let response = ui.horizontal(|ui| {
         // Small colored dot
         let (dot_rect, _) = ui.allocate_exact_size(Vec2::splat(8.0), egui::Sense::hover());
-        ui.painter()
-            .circle_filled(dot_rect.center(), 3.0, color);
+        ui.painter().circle_filled(dot_rect.center(), 3.0, color);
 
         // Clickable label
         let resp = ui.add(
-            egui::Label::new(
-                RichText::new(label)
-                    .size(12.0)
-                    .color(theme.text_accent),
-            )
-            .sense(egui::Sense::click()),
+            egui::Label::new(RichText::new(label).size(12.0).color(theme.text_accent))
+                .sense(egui::Sense::click()),
         );
-        resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
+        resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+            .clicked()
     });
     response.inner
 }
@@ -500,12 +478,7 @@ fn render_pill(ui: &mut egui::Ui, text: &str, color: Color32, theme: &LairesThem
         .corner_radius(CornerRadius::same(BADGE_RADIUS))
         .inner_margin(egui::Margin::symmetric(8, 2))
         .show(ui, |ui| {
-            ui.label(
-                RichText::new(text)
-                    .size(10.0)
-                    .strong()
-                    .color(color),
-            );
+            ui.label(RichText::new(text).size(10.0).strong().color(color));
         });
 }
 

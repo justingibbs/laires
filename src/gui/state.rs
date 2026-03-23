@@ -1,4 +1,5 @@
 use crate::config::ProjectConfig;
+use crate::runtime::story_eval::StoryEvalSnapshot;
 
 /// The two operating modes for a Laires session.
 ///
@@ -23,8 +24,14 @@ impl std::fmt::Display for SessionMode {
 /// Messages from agent -> GUI
 pub enum AgentEvent {
     Thinking,
-    ToolCall { name: String, args_summary: String },
-    ToolResult { name: String, result_summary: String },
+    ToolCall {
+        name: String,
+        args_summary: String,
+    },
+    ToolResult {
+        name: String,
+        result_summary: String,
+    },
     Response(String),
     Error(String),
     Idle,
@@ -51,6 +58,105 @@ pub enum GuiRequest {
         file: Option<String>,
         text: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum StoryChangeReason {
+    CanvasEdit,
+    AgentEdit,
+    ContextFileEdit,
+    ManualRefresh,
+}
+
+impl std::fmt::Display for StoryChangeReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StoryChangeReason::CanvasEdit => write!(f, "canvas edit"),
+            StoryChangeReason::AgentEdit => write!(f, "agent edit"),
+            StoryChangeReason::ContextFileEdit => write!(f, "context change"),
+            StoryChangeReason::ManualRefresh => write!(f, "manual refresh"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoryChangeScope {
+    pub reason: StoryChangeReason,
+    pub changed_files: Vec<String>,
+    pub changed_scene_ids: Vec<String>,
+}
+
+impl StoryChangeScope {
+    pub fn is_empty(&self) -> bool {
+        self.changed_files.is_empty() && self.changed_scene_ids.is_empty()
+    }
+
+    pub fn summary(&self) -> String {
+        let file_count = self.changed_files.len();
+        let scene_count = self.changed_scene_ids.len();
+
+        match (file_count, scene_count) {
+            (0, 0) => "Review pending".to_string(),
+            (_, 0) => format!(
+                "Review pending for {} {} after {}",
+                file_count,
+                if file_count == 1 { "file" } else { "files" },
+                self.reason
+            ),
+            (0, _) => format!(
+                "Review pending for {} {} after {}",
+                scene_count,
+                if scene_count == 1 { "scene" } else { "scenes" },
+                self.reason
+            ),
+            _ => format!(
+                "Review pending for {} {} in {} {} after {}",
+                scene_count,
+                if scene_count == 1 { "scene" } else { "scenes" },
+                file_count,
+                if file_count == 1 { "file" } else { "files" },
+                self.reason
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StoryChangeReview {
+    pub scope: StoryChangeScope,
+    pub before: StoryEvalSnapshot,
+    pub after: StoryEvalSnapshot,
+}
+
+impl StoryChangeReview {
+    pub fn summary(&self) -> String {
+        let scene_count = self.scope.changed_scene_ids.len();
+        let file_count = self.scope.changed_files.len();
+
+        match (file_count, scene_count) {
+            (_, 0) => format!(
+                "Reviewed {} {} after {}",
+                file_count,
+                if file_count == 1 { "file" } else { "files" },
+                self.scope.reason
+            ),
+            (0, _) => format!(
+                "Reviewed {} changed {} after {}",
+                scene_count,
+                if scene_count == 1 { "scene" } else { "scenes" },
+                self.scope.reason
+            ),
+            _ => format!(
+                "Reviewed {} changed {} in {} {} after {}",
+                scene_count,
+                if scene_count == 1 { "scene" } else { "scenes" },
+                file_count,
+                if file_count == 1 { "file" } else { "files" },
+                self.scope.reason
+            ),
+        }
+    }
 }
 
 /// Which screen the GUI is displaying.
@@ -101,6 +207,10 @@ pub struct GuiState {
 
     // Scan
     pub scan_requested: bool,
+
+    // Review loop state
+    pub review_pending: bool,
+    pub review_status_text: Option<String>,
 
     // Cached display values
     pub privacy_label: String,
@@ -194,6 +304,8 @@ impl Default for GuiState {
             analysis_sidebar_visible: true,
             sidebar_tab: SidebarTab::Scenes,
             scan_requested: false,
+            review_pending: false,
+            review_status_text: None,
             privacy_label: String::new(),
             model_name: String::new(),
             scene_count: 0,
@@ -208,6 +320,37 @@ impl Default for GuiState {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn change_scope_summary_counts_files_and_scenes() {
+        let scope = StoryChangeScope {
+            reason: StoryChangeReason::CanvasEdit,
+            changed_files: vec!["story.md".to_string()],
+            changed_scene_ids: vec!["scene-1".to_string(), "scene-2".to_string()],
+        };
+
+        let summary = scope.summary();
+        assert!(summary.contains("2 scenes"));
+        assert!(summary.contains("1 file"));
+        assert!(summary.contains("canvas edit"));
+    }
+
+    #[test]
+    fn change_scope_summary_handles_empty_scope() {
+        let scope = StoryChangeScope {
+            reason: StoryChangeReason::ManualRefresh,
+            changed_files: Vec::new(),
+            changed_scene_ids: Vec::new(),
+        };
+
+        assert_eq!(scope.summary(), "Review pending");
+        assert!(scope.is_empty());
+    }
+}
+
 /// Estimate the context window size (in tokens) for known model families.
 pub fn context_window_for_model(model: &str) -> u64 {
     let m = model.to_lowercase();
@@ -219,7 +362,11 @@ pub fn context_window_for_model(model: &str) -> u64 {
         1_048_576
     } else if m.contains("claude") {
         200_000
-    } else if m.contains("gpt-4o") || m.contains("gpt-4-turbo") || m.contains("o1") || m.contains("o3") {
+    } else if m.contains("gpt-4o")
+        || m.contains("gpt-4-turbo")
+        || m.contains("o1")
+        || m.contains("o3")
+    {
         128_000
     } else if m.contains("gpt-3.5") {
         16_385

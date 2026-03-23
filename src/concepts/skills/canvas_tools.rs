@@ -42,17 +42,19 @@ impl Skills {
                 Err(e) => serde_json::json!({ "error": e.to_string() }),
             },
             Ok(CanvasTarget::Manifest(file_path)) => {
-                apply_manifest_edit(ctx, &file_path, |entry| entry.text_buffer.insert(position, text))
-                    .map(|(_, scene_count)| {
-                        serde_json::json!({
-                            "status": "written",
-                            "position": position,
-                            "bytes_written": text.len(),
-                            "file_path": file_path,
-                            "scene_count": scene_count,
-                        })
+                apply_manifest_edit(ctx, &file_path, |entry| {
+                    entry.text_buffer.insert(position, text)
+                })
+                .map(|(_, scene_count)| {
+                    serde_json::json!({
+                        "status": "written",
+                        "position": position,
+                        "bytes_written": text.len(),
+                        "file_path": file_path,
+                        "scene_count": scene_count,
                     })
-                    .unwrap_or_else(|err| serde_json::json!({ "error": err }))
+                })
+                .unwrap_or_else(|err| serde_json::json!({ "error": err }))
             }
             Err(err) => err,
         }
@@ -98,18 +100,20 @@ impl Skills {
                 Err(e) => serde_json::json!({ "error": e.to_string() }),
             },
             Ok(CanvasTarget::Manifest(file_path)) => {
-                apply_manifest_edit(ctx, &file_path, |entry| entry.text_buffer.replace(range, text))
-                    .map(|(_, scene_count)| {
-                        serde_json::json!({
-                            "status": "replaced",
-                            "start": start,
-                            "end": end,
-                            "new_length": text.len(),
-                            "file_path": file_path,
-                            "scene_count": scene_count,
-                        })
+                apply_manifest_edit(ctx, &file_path, |entry| {
+                    entry.text_buffer.replace(range, text)
+                })
+                .map(|(_, scene_count)| {
+                    serde_json::json!({
+                        "status": "replaced",
+                        "start": start,
+                        "end": end,
+                        "new_length": text.len(),
+                        "file_path": file_path,
+                        "scene_count": scene_count,
                     })
-                    .unwrap_or_else(|err| serde_json::json!({ "error": err }))
+                })
+                .unwrap_or_else(|err| serde_json::json!({ "error": err }))
             }
             Err(err) => err,
         }
@@ -152,20 +156,20 @@ impl Skills {
                 }
                 Err(e) => serde_json::json!({ "error": e.to_string() }),
             },
-            CanvasTarget::Manifest(file_path) => {
-                apply_manifest_edit(ctx, &file_path, |entry| entry.text_buffer.insert(position, &scene_text))
-                    .map(|(_, scene_count)| {
-                        serde_json::json!({
-                            "status": "inserted",
-                            "position": position,
-                            "title": title,
-                            "bytes_written": scene_text.len(),
-                            "new_scene_count": scene_count,
-                            "file_path": file_path,
-                        })
-                    })
-                    .unwrap_or_else(|err| serde_json::json!({ "error": err }))
-            }
+            CanvasTarget::Manifest(file_path) => apply_manifest_edit(ctx, &file_path, |entry| {
+                entry.text_buffer.insert(position, &scene_text)
+            })
+            .map(|(_, scene_count)| {
+                serde_json::json!({
+                    "status": "inserted",
+                    "position": position,
+                    "title": title,
+                    "bytes_written": scene_text.len(),
+                    "new_scene_count": scene_count,
+                    "file_path": file_path,
+                })
+            })
+            .unwrap_or_else(|err| serde_json::json!({ "error": err })),
         }
     }
 }
@@ -179,7 +183,9 @@ fn optional_file_arg(args: &serde_json::Value) -> Result<Option<&str>, serde_jso
     match args.get("file") {
         None | Some(serde_json::Value::Null) => Ok(None),
         Some(serde_json::Value::String(path)) => Ok(Some(path.as_str())),
-        Some(_) => Err(serde_json::json!({ "error": "Field 'file' must be a string when provided" })),
+        Some(_) => {
+            Err(serde_json::json!({ "error": "Field 'file' must be a string when provided" }))
+        }
     }
 }
 
@@ -311,7 +317,7 @@ fn resolve_insert_target(
         None => {
             return Err(serde_json::json!({
                 "error": "Missing required field: position (or provide after_scene)"
-            }))
+            }));
         }
     };
 
@@ -324,10 +330,9 @@ fn apply_manifest_edit(
     edit: impl FnOnce(&mut FileEntry) -> crate::error::Result<()>,
 ) -> Result<(String, usize), String> {
     let sync_primary = {
-        let fbm = ctx
-            .file_buffer_manager
-            .as_deref()
-            .ok_or_else(|| "Manifest-backed edit requested without a file buffer manager".to_string())?;
+        let fbm = ctx.file_buffer_manager.as_deref().ok_or_else(|| {
+            "Manifest-backed edit requested without a file buffer manager".to_string()
+        })?;
         let entry = fbm
             .get_entry(file_path)
             .ok_or_else(|| format!("Story file '{}' not found in manifest", file_path))?;
@@ -335,10 +340,9 @@ fn apply_manifest_edit(
     };
 
     let (updated_text, updated_scene_map, scene_count) = {
-        let fbm = ctx
-            .file_buffer_manager
-            .as_deref_mut()
-            .ok_or_else(|| "Manifest-backed edit requested without a file buffer manager".to_string())?;
+        let fbm = ctx.file_buffer_manager.as_deref_mut().ok_or_else(|| {
+            "Manifest-backed edit requested without a file buffer manager".to_string()
+        })?;
         let entry = fbm
             .get_entry_mut(file_path)
             .ok_or_else(|| format!("Story file '{}' not found in manifest", file_path))?;

@@ -120,8 +120,7 @@ impl ProjectConfig {
                 model: "gemini-2.5-flash".to_string(),
                 api_key_env: Some("GEMINI_API_KEY".to_string()),
                 base_url: Some(
-                    "https://generativelanguage.googleapis.com/v1beta/openai"
-                        .to_string(),
+                    "https://generativelanguage.googleapis.com/v1beta/openai".to_string(),
                 ),
             },
             project: ProjectMeta {

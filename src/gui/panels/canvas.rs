@@ -1,8 +1,8 @@
 use eframe::egui::{self, Color32, CornerRadius, FontFamily, FontId, RichText, Vec2};
 
+use crate::gui::ProjectSnapshot;
 use crate::gui::state::{GuiState, SessionMode};
 use crate::gui::theme::{LairesTheme, PROSE_FONT};
-use crate::gui::ProjectSnapshot;
 
 /// Font used for story prose text (Source Serif 4).
 fn prose_font(size: f32) -> FontId {
@@ -54,11 +54,19 @@ pub fn render(
                 (&ftd.text, &ftd.boundary_lines, ftd.word_count)
             } else {
                 // Selected file not found in snapshot — fall back to combined
-                (&snap.story_text, &snap.scene_boundary_lines, state.word_count)
+                (
+                    &snap.story_text,
+                    &snap.scene_boundary_lines,
+                    state.word_count,
+                )
             }
         } else {
             // No file selection (single-file project) — use combined text
-            (&snap.story_text, &snap.scene_boundary_lines, state.word_count)
+            (
+                &snap.story_text,
+                &snap.scene_boundary_lines,
+                state.word_count,
+            )
         };
 
     // Sync canvas edit buffer when file selection changes or buffer is empty
@@ -258,8 +266,7 @@ fn render_breadcrumb(
     });
 
     // Scene title (large) — show selected scene or first scene in active file
-    let display_title = selected_scene_title(state, snap)
-        .unwrap_or_else(|| "Untitled".to_string());
+    let display_title = selected_scene_title(state, snap).unwrap_or_else(|| "Untitled".to_string());
     ui.label(
         RichText::new(&display_title)
             .font(prose_font(22.0))
@@ -306,8 +313,7 @@ fn render_prose(
             // Horizontal rule
             let rect = ui.available_rect_before_wrap();
             let rule_rect = egui::Rect::from_min_size(rect.min, Vec2::new(rect.width(), 1.0));
-            ui.painter()
-                .rect_filled(rule_rect, 0.0, theme.border);
+            ui.painter().rect_filled(rule_rect, 0.0, theme.border);
             ui.add_space(6.0);
 
             // Scene heading in small secondary text

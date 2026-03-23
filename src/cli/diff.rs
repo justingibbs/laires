@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::concepts::narrative_graph::{diff_graphs, GraphDiff, GraphNode, NarrativeGraph};
+use crate::concepts::narrative_graph::{GraphDiff, GraphNode, NarrativeGraph, diff_graphs};
 use crate::config::{self, GRAPH_FILE, LAIRES_DIR};
 
 #[derive(Debug, Clone, Copy)]
@@ -67,7 +67,12 @@ pub fn vcs_root(vcs: Vcs, project_root: &Path) -> anyhow::Result<PathBuf> {
 }
 
 /// Get a file's contents from a specific VCS revision
-pub fn vcs_show(vcs: Vcs, project_root: &Path, file_path: &str, revision: &str) -> anyhow::Result<String> {
+pub fn vcs_show(
+    vcs: Vcs,
+    project_root: &Path,
+    file_path: &str,
+    revision: &str,
+) -> anyhow::Result<String> {
     match vcs {
         Vcs::Git => {
             let spec = format!("{revision}:{file_path}");
@@ -96,7 +101,11 @@ pub fn vcs_show(vcs: Vcs, project_root: &Path, file_path: &str, revision: &str) 
 }
 
 /// Get list of commits that touched a specific file
-pub fn vcs_log_for_file(vcs: Vcs, project_root: &Path, file_path: &str) -> anyhow::Result<Vec<CommitInfo>> {
+pub fn vcs_log_for_file(
+    vcs: Vcs,
+    project_root: &Path,
+    file_path: &str,
+) -> anyhow::Result<Vec<CommitInfo>> {
     match vcs {
         Vcs::Git => {
             // Format: hash<TAB>subject<TAB>date
@@ -243,10 +252,7 @@ fn scene_word_count_deltas(old: &NarrativeGraph, new: &NarrativeGraph) -> Vec<St
     // Check removed scenes
     for (&id, &old_node) in &old_scenes {
         if !new_scenes.contains_key(id) {
-            if let GraphNode::Scene {
-                title, summary, ..
-            } = old_node
-            {
+            if let GraphNode::Scene { title, summary, .. } = old_node {
                 let old_words = summary.split_whitespace().count();
                 let label = title.as_deref().unwrap_or("(untitled)");
                 lines.push(format!(
@@ -267,14 +273,24 @@ pub fn format_graph_diff(diff: &GraphDiff) -> String {
     if !diff.added_nodes.is_empty() {
         out.push_str("  Added:\n");
         for node in &diff.added_nodes {
-            out.push_str(&format!("    + {} {}: {}\n", node.node_type_name(), node.node_id(), node_label(node)));
+            out.push_str(&format!(
+                "    + {} {}: {}\n",
+                node.node_type_name(),
+                node.node_id(),
+                node_label(node)
+            ));
         }
     }
 
     if !diff.removed_nodes.is_empty() {
         out.push_str("  Removed:\n");
         for node in &diff.removed_nodes {
-            out.push_str(&format!("    - {} {}: {}\n", node.node_type_name(), node.node_id(), node_label(node)));
+            out.push_str(&format!(
+                "    - {} {}: {}\n",
+                node.node_type_name(),
+                node.node_id(),
+                node_label(node)
+            ));
         }
     }
 
@@ -322,11 +338,11 @@ fn node_label(node: &GraphNode) -> String {
     match node {
         GraphNode::Character { name, .. } => name.clone(),
         GraphNode::Objective {
-            description, status, ..
+            description,
+            status,
+            ..
         } => format!("{description} [{status:?}]"),
-        GraphNode::Scene { title, .. } => {
-            title.as_deref().unwrap_or("(untitled)").to_string()
-        }
+        GraphNode::Scene { title, .. } => title.as_deref().unwrap_or("(untitled)").to_string(),
         GraphNode::Conflict { description, .. } => description.clone(),
     }
 }
@@ -462,7 +478,8 @@ mod tests {
         new.add_node(GraphNode::Scene {
             id: "s1".to_string(),
             title: Some("Opening".to_string()),
-            summary: "The hero arrives at the village and meets the elder who tells a story.".to_string(),
+            summary: "The hero arrives at the village and meets the elder who tells a story."
+                .to_string(),
             characters_present: vec![],
             location: None,
             time: None,

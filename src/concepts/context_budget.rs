@@ -121,7 +121,9 @@ pub fn summarize_history(history: &[Message], keep_recent: usize) -> Vec<Message
                 // Check if next message is an assistant response
                 if i + 1 < older.len() && older[i + 1].role == Role::Assistant {
                     let asst_brief = extract_key_phrase(&older[i + 1].content);
-                    summary_lines.push(format!("- user asked about {user_brief}, assistant responded about {asst_brief}"));
+                    summary_lines.push(format!(
+                        "- user asked about {user_brief}, assistant responded about {asst_brief}"
+                    ));
                     i += 2;
                 } else {
                     summary_lines.push(format!("- user asked about {user_brief}"));
@@ -225,7 +227,10 @@ mod tests {
     #[test]
     fn test_estimate_tokens() {
         // 40 chars -> ~10 tokens
-        assert_eq!(estimate_tokens("a]b\nc d\te fghijklmn opqrstuvwxyz1234567"), 9);
+        assert_eq!(
+            estimate_tokens("a]b\nc d\te fghijklmn opqrstuvwxyz1234567"),
+            9
+        );
         assert_eq!(estimate_tokens(""), 0);
     }
 
@@ -247,9 +252,7 @@ mod tests {
         assert_eq!(report.tool_schema_tokens, 0);
         assert_eq!(
             report.total_tokens,
-            report.system_prompt_tokens
-                + report.graph_tokens
-                + report.user_message_tokens
+            report.system_prompt_tokens + report.graph_tokens + report.user_message_tokens
         );
     }
 

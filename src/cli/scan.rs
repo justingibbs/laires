@@ -1,13 +1,14 @@
-use crate::concepts::analysis::{apply_analysis_to_graph, Analysis, AnalysisKind, AnalysisTask, Priority};
+use crate::concepts::analysis::{
+    Analysis, AnalysisKind, AnalysisTask, Priority, apply_analysis_to_graph,
+};
 use crate::concepts::file_buffer_manager::FileBufferManager;
 use crate::concepts::manifest::{
-    self, build_classification_prompt, build_manifest_from_classification,
-    discover_files, diff_against_manifest, parse_classification_response,
-    print_classification, Manifest,
+    self, Manifest, build_classification_prompt, build_manifest_from_classification,
+    diff_against_manifest, discover_files, parse_classification_response, print_classification,
 };
 use crate::concepts::narrative_graph::NarrativeGraph;
 use crate::concepts::provider::{Message, Provider, Role};
-use crate::config::{self, ProjectConfig, LAIRES_DIR};
+use crate::config::{self, LAIRES_DIR, ProjectConfig};
 use crate::runtime::scene_cache::SceneCache;
 
 pub async fn run(scene_num: Option<usize>, full: bool) -> anyhow::Result<()> {
@@ -43,10 +44,7 @@ pub async fn run(scene_num: Option<usize>, full: bool) -> anyhow::Result<()> {
             existing
         } else {
             // New or removed files: re-classify everything
-            println!(
-                "Found {} new file(s). Classifying...",
-                diff.new_files.len()
-            );
+            println!("Found {} new file(s). Classifying...", diff.new_files.len());
             classify_and_confirm(&discovered, &config, &project_root).await?
         }
     } else {
@@ -54,15 +52,10 @@ pub async fn run(scene_num: Option<usize>, full: bool) -> anyhow::Result<()> {
         let discovered = discover_files(&project_root)?;
         if discovered.is_empty() {
             println!("No text files found in project directory.");
-            println!(
-                "Add .md, .fountain, or .txt files and run `laires scan` again."
-            );
+            println!("Add .md, .fountain, or .txt files and run `laires scan` again.");
             return Ok(());
         }
-        println!(
-            "Discovered {} file(s). Classifying...",
-            discovered.len()
-        );
+        println!("Discovered {} file(s). Classifying...", discovered.len());
         classify_and_confirm(&discovered, &config, &project_root).await?
     };
 
@@ -157,8 +150,7 @@ pub async fn run(scene_num: Option<usize>, full: bool) -> anyhow::Result<()> {
             .await
         {
             Ok(Some(result)) => {
-                let title =
-                    scene.title.as_deref().unwrap_or("(untitled)");
+                let title = scene.title.as_deref().unwrap_or("(untitled)");
                 println!("Scene \"{title}\":");
                 println!(
                     "  Characters: {}",
@@ -169,14 +161,8 @@ pub async fn run(scene_num: Option<usize>, full: bool) -> anyhow::Result<()> {
                         .collect::<Vec<_>>()
                         .join(", ")
                 );
-                println!(
-                    "  Objectives: {}",
-                    result.objectives_found.len()
-                );
-                println!(
-                    "  Conflicts: {}",
-                    result.conflicts_found.len()
-                );
+                println!("  Objectives: {}", result.objectives_found.len());
+                println!("  Conflicts: {}", result.conflicts_found.len());
                 if let Some(meta) = &result.scene_metadata {
                     println!("  Summary: {}", meta.summary);
                 }
@@ -189,10 +175,7 @@ pub async fn run(scene_num: Option<usize>, full: bool) -> anyhow::Result<()> {
             }
             Ok(None) => {}
             Err(e) => {
-                eprintln!(
-                    "Analysis error for scene \"{}\": {e}",
-                    scene.id
-                );
+                eprintln!("Analysis error for scene \"{}\": {e}", scene.id);
             }
         }
     }
@@ -200,23 +183,17 @@ pub async fn run(scene_num: Option<usize>, full: bool) -> anyhow::Result<()> {
     // Auto-generate PresentIn edges from Fountain character cues
     for entry in fbm.entries() {
         for cue in entry.scene_map.character_cues() {
-            let char_id =
-                graph.get_characters().iter().find_map(|c| {
-                    if let crate::concepts::narrative_graph::GraphNode::Character {
-                        id,
-                        name,
-                        ..
-                    } = c
-                    {
-                        if name.eq_ignore_ascii_case(&cue.character_name) {
-                            Some(id.clone())
-                        } else {
-                            None
-                        }
+            let char_id = graph.get_characters().iter().find_map(|c| {
+                if let crate::concepts::narrative_graph::GraphNode::Character { id, name, .. } = c {
+                    if name.eq_ignore_ascii_case(&cue.character_name) {
+                        Some(id.clone())
                     } else {
                         None
                     }
-                });
+                } else {
+                    None
+                }
+            });
             if let Some(cid) = char_id {
                 graph.add_edge(
                     &cid,
@@ -280,11 +257,7 @@ async fn classify_and_confirm(
     print_classification(&result);
 
     if confirm_classification()? {
-        let manifest = build_manifest_from_classification(
-            result,
-            discovered,
-            classification_model,
-        );
+        let manifest = build_manifest_from_classification(result, discovered, classification_model);
         manifest.save(project_root)?;
         println!("Manifest saved.");
         Ok(manifest)

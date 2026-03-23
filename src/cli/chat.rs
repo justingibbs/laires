@@ -2,11 +2,9 @@ use std::io::{self, BufRead, Write};
 
 use crate::concepts::provider::{Message, ToolCall, ToolResult};
 use crate::concepts::skills::{SkillContext, SkillSetContext};
-use crate::config::{
-    self, CHAT_HISTORY_FILE, LAIRES_DIR,
-};
+use crate::config::{self, CHAT_HISTORY_FILE, LAIRES_DIR};
 use crate::runtime::agent_session::{
-    truncate_json, AgentSession, ChatTurnError, ChatTurnRequest, SessionEvent,
+    AgentSession, ChatTurnError, ChatTurnRequest, SessionEvent, truncate_json,
 };
 use crate::runtime::project_loader::load_project;
 use crate::runtime::story_access::StoryAccess;
@@ -70,7 +68,11 @@ pub async fn run(new_session: bool) -> anyhow::Result<()> {
     };
     let mut session = AgentSession::with_history(history);
 
-    let privacy = if provider.is_local() { "local" } else { "cloud" };
+    let privacy = if provider.is_local() {
+        "local"
+    } else {
+        "cloud"
+    };
 
     println!("Laires Chat - {} ({})", config.project.title, privacy);
     let story = StoryAccess::new(&text_buffer, &scene_map, file_buffer_manager.as_ref());
@@ -139,10 +141,7 @@ pub async fn run(new_session: bool) -> anyhow::Result<()> {
                 prepared,
                 |tool_calls, provider, skills, runtime| {
                     Box::pin(execute_chat_tool_calls(
-                        tool_calls,
-                        provider,
-                        skills,
-                        runtime,
+                        tool_calls, provider, skills, runtime,
                     ))
                 },
                 |event| match event {
@@ -244,11 +243,7 @@ async fn execute_chat_tool_calls(
             .invoke(&tc.name, &tc.arguments, &mut ctx, Some(provider))
             .await;
 
-        println!(
-            "[tool: {} -> {}]",
-            tc.name,
-            truncate_json(&result, 200)
-        );
+        println!("[tool: {} -> {}]", tc.name, truncate_json(&result, 200));
 
         tool_results.push(ToolResult {
             tool_call_id: tc.id.clone(),

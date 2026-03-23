@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use eframe::egui::{self, Color32, CornerRadius, Pos2, Rect, RichText, Stroke, Vec2};
 
+use crate::gui::ProjectSnapshot;
 use crate::gui::state::GuiState;
 use crate::gui::theme::LairesTheme;
-use crate::gui::ProjectSnapshot;
 
 const NODE_RADIUS: f32 = 20.0;
 const NODE_BORDER: f32 = 2.0;
@@ -87,9 +87,10 @@ impl GraphLayoutState {
         }
 
         for ge in &snapshot.graph_edges {
-            if let (Some(&src), Some(&dst)) =
-                (self.id_to_idx.get(&ge.source), self.id_to_idx.get(&ge.target))
-            {
+            if let (Some(&src), Some(&dst)) = (
+                self.id_to_idx.get(&ge.source),
+                self.id_to_idx.get(&ge.target),
+            ) {
                 self.edges.push((src, dst, ge.label.clone()));
             }
         }
@@ -234,8 +235,7 @@ pub fn render(
 
         // Allocate drawing area
         let available = ui.available_size();
-        let (response, painter) =
-            ui.allocate_painter(available, egui::Sense::click_and_drag());
+        let (response, painter) = ui.allocate_painter(available, egui::Sense::click_and_drag());
         let rect = response.rect;
         let center = rect.center();
 
@@ -264,9 +264,7 @@ pub fn render(
         };
 
         // Edge color (softer)
-        let edge_color = Color32::from_rgba_premultiplied(
-            0xCE, 0xD4, 0xDA, EDGE_COLOR_ALPHA,
-        );
+        let edge_color = Color32::from_rgba_premultiplied(0xCE, 0xD4, 0xDA, EDGE_COLOR_ALPHA);
 
         // === Draw edges as quadratic bezier curves ===
         for &(src, dst, ref _label) in &layout.edges {
@@ -348,11 +346,7 @@ pub fn render(
             painter.circle_filled(screen_pos, r, color);
 
             // White border
-            painter.circle_stroke(
-                screen_pos,
-                r,
-                Stroke::new(NODE_BORDER, Color32::WHITE),
-            );
+            painter.circle_stroke(screen_pos, r, Stroke::new(NODE_BORDER, Color32::WHITE));
 
             // Label — try to fit short labels inside the node, longer ones below
             let font_size = (11.0 * layout.zoom).clamp(7.0, 16.0);
@@ -476,7 +470,6 @@ fn render_legend(painter: &egui::Painter, rect: Rect, theme: &LairesTheme) {
         );
     }
 }
-
 
 fn node_color(node_type: &str, theme: &LairesTheme) -> Color32 {
     match node_type {

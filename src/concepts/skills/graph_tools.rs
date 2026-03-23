@@ -3,7 +3,7 @@ use crate::concepts::narrative_graph::{GraphNode, NarrativeGraph};
 use crate::runtime::story_access::StoryAccess;
 use crate::sync::divergence;
 
-use super::{find_character_id, Skills};
+use super::{Skills, find_character_id};
 
 impl Skills {
     pub(super) fn exec_query_graph(
@@ -66,10 +66,7 @@ impl Skills {
         })
     }
 
-    pub(super) fn exec_find_dead_scenes(
-        &self,
-        graph: &NarrativeGraph,
-    ) -> serde_json::Value {
+    pub(super) fn exec_find_dead_scenes(&self, graph: &NarrativeGraph) -> serde_json::Value {
         let dead = graph.find_dead_scenes();
         serde_json::json!({
             "dead_scene_count": dead.len(),

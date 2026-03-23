@@ -2,22 +2,26 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::concepts::analysis::{
-    apply_analysis_to_graph, Analysis, AnalysisKind, AnalysisTask, Priority,
+    Analysis, AnalysisKind, AnalysisTask, Priority, apply_analysis_to_graph,
 };
 use crate::concepts::file_buffer_manager::FileBufferManager;
 use crate::concepts::manifest::{
-    build_classification_prompt, build_manifest_from_classification, discover_files,
-    parse_classification_response, Manifest,
+    Manifest, build_classification_prompt, build_manifest_from_classification, discover_files,
+    parse_classification_response,
 };
 use crate::concepts::provider::{Message, Provider, Role, ToolCall, ToolResult};
 use crate::concepts::skills::{SkillContext, SkillSetContext, Skills};
 use crate::config::LAIRES_DIR;
-use crate::gui::state::{AgentEvent, GuiRequest, SessionMode};
 use crate::gui::ProjectData;
+use crate::gui::state::{
+    AgentEvent, GuiRequest, SessionMode, StoryChangeReason, StoryChangeReview, StoryChangeScope,
+};
 use crate::runtime::agent_session::{
-    truncate_json, AgentSession, ChatTurnError, ChatTurnRequest, SessionEvent,
+    AgentSession, ChatTurnError, ChatTurnRequest, SessionEvent, truncate_json,
 };
 use crate::runtime::scene_cache::SceneCache;
+use crate::runtime::story_access::StoryAccess;
+use crate::runtime::story_eval::StoryEvalSnapshot;
 
 const SYSTEM_PROMPT_BASE: &str = r#"You are Laires, an intelligent narrative analysis agent for fiction writers. You have deep understanding of story structure, character arcs, objectives, conflicts, and pacing.
 
@@ -75,6 +79,179 @@ fn skill_context_for_mode(mode: SessionMode) -> SkillSetContext {
 struct GuiToolRuntime {
     domain: Arc<Mutex<ProjectData>>,
     events: std::sync::mpsc::Sender<AgentEvent>,
+}
+
+fn project_relative_path(project_root: &std::path::Path, file_path: &std::path::Path) -> String {
+    file_path
+        .strip_prefix(project_root)
+        .ok()
+        .map(|p| p.to_string_lossy().trim_start_matches('/').to_string())
+        .unwrap_or_else(|| file_path.display().to_string())
+}
+
+fn record_pending_review_scope(
+    d: &mut ProjectData,
+    reason: StoryChangeReason,
+    changed_files: Vec<String>,
+    changed_scene_ids: Vec<String>,
+) {
+    let scope = StoryChangeScope {
+        reason,
+        changed_files,
+        changed_scene_ids,
+    };
+    d.pending_change_scope = if scope.is_empty() { None } else { Some(scope) };
+}
+
+fn sync_pending_review_scope_from_scene_maps(d: &mut ProjectData, reason: StoryChangeReason) {
+    let mut changed_files = Vec::new();
+    let mut changed_scene_ids = Vec::new();
+
+    if let Some(ref fbm) = d.file_buffer_manager {
+        for entry in fbm.entries() {
+            let pending_ids = entry.scene_map.get_pending();
+            if pending_ids.is_empty() {
+                continue;
+            }
+            changed_files.push(entry.file_path.clone());
+            for scene in entry.scene_map.list_scenes() {
+                if pending_ids.contains(&scene.id) {
+                    changed_scene_ids.push(scene.id.clone());
+                }
+            }
+        }
+    } else {
+        let pending_ids = d.scene_map.get_pending();
+        if !pending_ids.is_empty() {
+            changed_files.push(project_relative_path(
+                &d.project_root,
+                d.text_buffer.file_path(),
+            ));
+            for scene in d.scene_map.list_scenes() {
+                if pending_ids.contains(&scene.id) {
+                    changed_scene_ids.push(scene.id.clone());
+                }
+            }
+        }
+    }
+
+    record_pending_review_scope(d, reason, changed_files, changed_scene_ids);
+}
+
+fn capture_story_eval_snapshot(d: &ProjectData) -> StoryEvalSnapshot {
+    let story = StoryAccess::new(&d.text_buffer, &d.scene_map, d.file_buffer_manager.as_ref());
+    let stale_scene_count = d
+        .pending_change_scope
+        .as_ref()
+        .map(|scope| scope.changed_scene_ids.len())
+        .unwrap_or(0);
+    StoryEvalSnapshot::capture(&d.graph, &d.intent, &story, stale_scene_count)
+}
+
+fn changed_range(
+    old_text: &str,
+    new_text: &str,
+) -> Option<crate::concepts::text_buffer::ByteRange> {
+    if old_text == new_text {
+        return None;
+    }
+
+    let old_bytes = old_text.as_bytes();
+    let new_bytes = new_text.as_bytes();
+
+    let mut prefix = 0usize;
+    let prefix_cap = old_bytes.len().min(new_bytes.len());
+    while prefix < prefix_cap && old_bytes[prefix] == new_bytes[prefix] {
+        prefix += 1;
+    }
+
+    let mut old_suffix = old_bytes.len();
+    let mut new_suffix = new_bytes.len();
+    while old_suffix > prefix
+        && new_suffix > prefix
+        && old_bytes[old_suffix - 1] == new_bytes[new_suffix - 1]
+    {
+        old_suffix -= 1;
+        new_suffix -= 1;
+    }
+
+    Some(crate::concepts::text_buffer::ByteRange::new(
+        prefix, new_suffix,
+    ))
+}
+
+#[derive(Clone)]
+struct SceneAnalysisJob {
+    scene_id: String,
+    file_path: String,
+    title: Option<String>,
+    scene_text: String,
+    content_hash: String,
+}
+
+async fn run_incremental_review(
+    d: &mut ProjectData,
+    provider: &mut Provider,
+    jobs: Vec<SceneAnalysisJob>,
+) -> anyhow::Result<usize> {
+    if jobs.is_empty() {
+        return Ok(0);
+    }
+
+    let mut analysis = Analysis::new();
+    let mut scenes_analyzed = 0usize;
+
+    for job in jobs {
+        analysis.enqueue(AnalysisTask {
+            kind: AnalysisKind::SceneAnalysis {
+                scene_id: job.scene_id.clone(),
+            },
+            priority: Priority::High,
+            created: chrono::Utc::now(),
+        });
+
+        let graph_context = d.graph.serialize_compact();
+        match analysis
+            .process_next(provider, &job.scene_text, &graph_context, &job.content_hash)
+            .await
+        {
+            Ok(Some(result)) => {
+                apply_analysis_to_graph(&mut d.graph, &result, &job.scene_id, &job.file_path);
+                if let Some(ref mut fbm) = d.file_buffer_manager {
+                    if let Some(entry) = fbm.get_entry_mut(&job.file_path) {
+                        entry.scene_map.mark_analyzed(&job.scene_id);
+                    }
+                } else {
+                    d.scene_map.mark_analyzed(&job.scene_id);
+                }
+                scenes_analyzed += 1;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return Err(anyhow::anyhow!(
+                    "Analysis error for scene \"{}\": {e}",
+                    job.title.as_deref().unwrap_or(&job.scene_id)
+                ));
+            }
+        }
+    }
+
+    let graph_path = d.project_root.join(LAIRES_DIR).join("graph.json");
+    d.graph.save(&graph_path)?;
+    if let Some(ref fbm) = d.file_buffer_manager {
+        SceneCache::from_file_buffer_manager(fbm).save_to_project(&d.project_root)?;
+    } else {
+        let rel_path = project_relative_path(&d.project_root, d.text_buffer.file_path());
+        SceneCache::from_single_file(rel_path, &d.scene_map).save_to_project(&d.project_root)?;
+    }
+
+    let graph_hash = blake3::hash(d.graph.serialize_compact().as_bytes())
+        .to_hex()
+        .to_string();
+    d.perspectives.invalidate_by_graph_hash(&graph_hash);
+    sync_pending_review_scope_from_scene_maps(d, StoryChangeReason::CanvasEdit);
+
+    Ok(scenes_analyzed)
 }
 
 pub async fn agent_loop(
@@ -140,15 +317,18 @@ pub async fn agent_loop(
                         let _ = events.send(AgentEvent::Response(format!(
                             "Provider switched to {} ({})",
                             provider.model_name(),
-                            if provider.is_local() { "local" } else { "cloud" }
+                            if provider.is_local() {
+                                "local"
+                            } else {
+                                "cloud"
+                            }
                         )));
                         let _ = events.send(AgentEvent::StateChanged);
                         let _ = events.send(AgentEvent::Idle);
                     }
                     Err(e) => {
-                        let _ = events.send(AgentEvent::Error(format!(
-                            "Failed to switch provider: {e}"
-                        )));
+                        let _ = events
+                            .send(AgentEvent::Error(format!("Failed to switch provider: {e}")));
                         let _ = events.send(AgentEvent::Idle);
                     }
                 }
@@ -192,9 +372,8 @@ pub async fn agent_loop(
                     }
                     // Reset brief for the new session
                     let title = guard.config.project.title.clone();
-                    guard.revision_brief = Some(
-                        crate::concepts::revision_brief::RevisionBrief::new(&title),
-                    );
+                    guard.revision_brief =
+                        Some(crate::concepts::revision_brief::RevisionBrief::new(&title));
                 }
                 session.clear();
                 let _ = events.send(AgentEvent::Response(
@@ -214,26 +393,75 @@ pub async fn agent_loop(
             GuiRequest::CanvasTextChanged { file, text } => {
                 let mut guard = domain.lock().await;
                 let d = &mut *guard;
+                let mut did_change = false;
+                let mut review_jobs: Vec<SceneAnalysisJob> = Vec::new();
 
                 let save_result = if let Some(ref file_path) = file {
                     // Multi-file: update in FileBufferManager
                     if let Some(ref mut fbm) = d.file_buffer_manager {
                         if let Some(entry) = fbm.get_entry_mut(file_path) {
-                            let current_len = entry.text_buffer.read_all().len();
-                            let range = crate::concepts::text_buffer::ByteRange::new(0, current_len);
-                            if let Err(e) = entry.text_buffer.replace(range, &text) {
-                                Err(format!("{e}"))
+                            if entry.text_buffer.read_all() == text {
+                                Ok(())
                             } else {
-                                let new_text = entry.text_buffer.read_all();
-                                let parse_mode = if entry.format == "fountain" {
-                                    crate::concepts::scene_map::ParseMode::Fountain
+                                did_change = true;
+                                let old_text = entry.text_buffer.read_all();
+                                let current_len = old_text.len();
+                                let range =
+                                    crate::concepts::text_buffer::ByteRange::new(0, current_len);
+                                if let Err(e) = entry.text_buffer.replace(range, &text) {
+                                    Err(format!("{e}"))
                                 } else {
-                                    crate::concepts::scene_map::ParseMode::Prose
-                                };
-                                let mut sm = crate::concepts::scene_map::SceneMap::new(parse_mode);
-                                sm.full_reindex(&new_text, file_path);
-                                entry.scene_map = sm;
-                                entry.text_buffer.save().map_err(|e| format!("{e}"))
+                                    let new_text = entry.text_buffer.read_all();
+                                    let removed_scene_ids = {
+                                        let previous_scene_ids = entry
+                                            .scene_map
+                                            .list_scenes()
+                                            .iter()
+                                            .map(|scene| scene.id.clone())
+                                            .collect::<std::collections::HashSet<_>>();
+                                        let changed_ranges = changed_range(&old_text, &new_text)
+                                            .into_iter()
+                                            .collect::<Vec<_>>();
+                                        entry.scene_map.reindex(
+                                            &new_text,
+                                            file_path,
+                                            &changed_ranges,
+                                        );
+                                        let current_scene_ids = entry
+                                            .scene_map
+                                            .list_scenes()
+                                            .iter()
+                                            .map(|scene| scene.id.clone())
+                                            .collect::<std::collections::HashSet<_>>();
+                                        previous_scene_ids
+                                            .difference(&current_scene_ids)
+                                            .cloned()
+                                            .collect::<Vec<_>>()
+                                    };
+                                    for removed_scene_id in removed_scene_ids {
+                                        d.graph.clear_scene_analysis(&removed_scene_id, true);
+                                    }
+                                    review_jobs = entry
+                                        .scene_map
+                                        .list_scenes()
+                                        .iter()
+                                        .filter(|scene| {
+                                            entry.scene_map.get_pending().contains(&scene.id)
+                                        })
+                                        .filter_map(|scene| {
+                                            entry.text_buffer.read(scene.byte_range()).ok().map(
+                                                |scene_text| SceneAnalysisJob {
+                                                    scene_id: scene.id.clone(),
+                                                    file_path: file_path.clone(),
+                                                    title: scene.title.clone(),
+                                                    scene_text,
+                                                    content_hash: scene.content_hash.clone(),
+                                                },
+                                            )
+                                        })
+                                        .collect();
+                                    entry.text_buffer.save().map_err(|e| format!("{e}"))
+                                }
                             }
                         } else {
                             Err(format!("File '{}' not found in manifest", file_path))
@@ -243,21 +471,99 @@ pub async fn agent_loop(
                     }
                 } else {
                     // Single-file: update primary text buffer
-                    let current_len = d.text_buffer.read_all().len();
-                    let range = crate::concepts::text_buffer::ByteRange::new(0, current_len);
-                    if let Err(e) = d.text_buffer.replace(range, &text) {
-                        Err(format!("{e}"))
+                    if d.text_buffer.read_all() == text {
+                        Ok(())
                     } else {
-                        let full_text = d.text_buffer.read_all();
-                        d.scene_map.full_reindex(&full_text, "");
-                        d.text_buffer.save().map_err(|e| format!("{e}"))
+                        did_change = true;
+                        let old_text = d.text_buffer.read_all();
+                        let current_len = old_text.len();
+                        let range = crate::concepts::text_buffer::ByteRange::new(0, current_len);
+                        if let Err(e) = d.text_buffer.replace(range, &text) {
+                            Err(format!("{e}"))
+                        } else {
+                            let full_text = d.text_buffer.read_all();
+                            let rel_path =
+                                project_relative_path(&d.project_root, d.text_buffer.file_path());
+                            let previous_scene_ids = d
+                                .scene_map
+                                .list_scenes()
+                                .iter()
+                                .map(|scene| scene.id.clone())
+                                .collect::<std::collections::HashSet<_>>();
+                            let changed_ranges = changed_range(&old_text, &full_text)
+                                .into_iter()
+                                .collect::<Vec<_>>();
+                            d.scene_map.reindex(&full_text, &rel_path, &changed_ranges);
+                            let current_scene_ids = d
+                                .scene_map
+                                .list_scenes()
+                                .iter()
+                                .map(|scene| scene.id.clone())
+                                .collect::<std::collections::HashSet<_>>();
+                            for removed_scene_id in previous_scene_ids
+                                .difference(&current_scene_ids)
+                                .cloned()
+                                .collect::<Vec<_>>()
+                            {
+                                d.graph.clear_scene_analysis(&removed_scene_id, true);
+                            }
+                            review_jobs =
+                                d.scene_map
+                                    .list_scenes()
+                                    .iter()
+                                    .filter(|scene| d.scene_map.get_pending().contains(&scene.id))
+                                    .filter_map(|scene| {
+                                        d.text_buffer.read(scene.byte_range()).ok().map(
+                                            |scene_text| SceneAnalysisJob {
+                                                scene_id: scene.id.clone(),
+                                                file_path: rel_path.clone(),
+                                                title: scene.title.clone(),
+                                                scene_text,
+                                                content_hash: scene.content_hash.clone(),
+                                            },
+                                        )
+                                    })
+                                    .collect();
+                            d.text_buffer.save().map_err(|e| format!("{e}"))
+                        }
                     }
                 };
 
-                if let Err(e) = save_result {
-                    let _ = events.send(AgentEvent::Error(format!("Canvas save error: {e}")));
+                match save_result {
+                    Ok(()) if did_change => {
+                        d.latest_change_review = None;
+                        sync_pending_review_scope_from_scene_maps(d, StoryChangeReason::CanvasEdit);
+                        let review_scope = d.pending_change_scope.clone();
+                        let before_eval = capture_story_eval_snapshot(d);
+                        let _ = events.send(AgentEvent::StateChanged);
+                        if !review_jobs.is_empty() {
+                            let _ = events.send(AgentEvent::Thinking);
+                            match run_incremental_review(d, &mut provider, review_jobs).await {
+                                Ok(_) => {
+                                    if let Some(scope) = review_scope {
+                                        d.latest_change_review = Some(StoryChangeReview {
+                                            scope,
+                                            before: before_eval,
+                                            after: capture_story_eval_snapshot(d),
+                                        });
+                                    }
+                                    let _ = events.send(AgentEvent::StateChanged);
+                                }
+                                Err(e) => {
+                                    let _ = events.send(AgentEvent::Error(format!(
+                                        "Incremental review error: {e}"
+                                    )));
+                                    let _ = events.send(AgentEvent::StateChanged);
+                                }
+                            }
+                            let _ = events.send(AgentEvent::Idle);
+                        }
+                    }
+                    Ok(()) => {}
+                    Err(e) => {
+                        let _ = events.send(AgentEvent::Error(format!("Canvas save error: {e}")));
+                    }
                 }
-                let _ = events.send(AgentEvent::StateChanged);
             }
             GuiRequest::Chat(input) => {
                 let _ = events.send(AgentEvent::Thinking);
@@ -287,10 +593,7 @@ pub async fn agent_loop(
                         prepared,
                         |tool_calls, provider, skills, runtime| {
                             Box::pin(execute_gui_tool_calls(
-                                runtime,
-                                tool_calls,
-                                provider,
-                                skills,
+                                runtime, tool_calls, provider, skills,
                             ))
                         },
                         |event| match event {
@@ -316,9 +619,8 @@ pub async fn agent_loop(
                         let _ = events.send(AgentEvent::Idle);
                     }
                     Err(ChatTurnError::MaxToolTurnsReached) => {
-                        let _ = events.send(AgentEvent::Error(
-                            "[Max tool turns reached]".to_string(),
-                        ));
+                        let _ =
+                            events.send(AgentEvent::Error("[Max tool turns reached]".to_string()));
                         let _ = events.send(AgentEvent::Idle);
                     }
                     Err(ChatTurnError::EmptyResponse) => {
@@ -344,9 +646,8 @@ pub async fn agent_loop(
                         } else {
                             String::new()
                         };
-                        let _ = events.send(AgentEvent::Error(format!(
-                            "LLM error: {err_str}{hint}"
-                        )));
+                        let _ =
+                            events.send(AgentEvent::Error(format!("LLM error: {err_str}{hint}")));
                         let _ = events.send(AgentEvent::Idle);
                     }
                 }
@@ -412,11 +713,8 @@ async fn run_gui_scan(
 
         let raw = response.content.unwrap_or_default();
         let result = parse_classification_response(&raw)?;
-        let manifest = build_manifest_from_classification(
-            result,
-            &discovered,
-            &d.config.classification.model,
-        );
+        let manifest =
+            build_manifest_from_classification(result, &discovered, &d.config.classification.model);
         manifest.save(&project_root)?;
         d.manifest = Some(manifest.clone());
         manifest
@@ -492,6 +790,8 @@ async fn run_gui_scan(
     // Persist graph and aggregate scene cache
     d.graph.save(&graph_path)?;
     SceneCache::from_file_buffer_manager(&fbm).save_to_project(&project_root)?;
+    d.pending_change_scope = None;
+    d.latest_change_review = None;
 
     // Persist FBM into ProjectData so sidebar can read it
     d.file_buffer_manager = Some(fbm);
@@ -534,10 +834,7 @@ async fn run_scan_single_buffer(
     let mut scenes_analyzed = 0usize;
 
     for scene in &scenes {
-        let scene_text = d
-            .text_buffer
-            .read(scene.byte_range())
-            .unwrap_or_default();
+        let scene_text = d.text_buffer.read(scene.byte_range()).unwrap_or_default();
 
         analysis.enqueue(AnalysisTask {
             kind: AnalysisKind::SceneAnalysis {
@@ -579,7 +876,10 @@ async fn run_scan_single_buffer(
         .unwrap_or(&file_path_str)
         .trim_start_matches('/')
         .to_string();
-    SceneCache::from_single_file(rel_path.clone(), &d.scene_map).save_to_project(&d.project_root)?;
+    SceneCache::from_single_file(rel_path.clone(), &d.scene_map)
+        .save_to_project(&d.project_root)?;
+    d.pending_change_scope = None;
+    d.latest_change_review = None;
 
     // Create a manifest from the loaded story file so the Files tab is populated
     if d.manifest.is_none() {
@@ -684,4 +984,28 @@ async fn execute_gui_tool_calls(
 
     let _ = runtime.events.send(AgentEvent::StateChanged);
     tool_results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::changed_range;
+
+    #[test]
+    fn changed_range_detects_middle_replacement() {
+        let range = changed_range("abcXYZdef", "abc123def").unwrap();
+        assert_eq!(range.start, 3);
+        assert_eq!(range.end, 6);
+    }
+
+    #[test]
+    fn changed_range_detects_insertion() {
+        let range = changed_range("abcdef", "abcZZdef").unwrap();
+        assert_eq!(range.start, 3);
+        assert_eq!(range.end, 5);
+    }
+
+    #[test]
+    fn changed_range_none_for_identical_text() {
+        assert!(changed_range("same", "same").is_none());
+    }
 }

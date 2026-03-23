@@ -1,6 +1,6 @@
+use petgraph::Direction;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
-use petgraph::Direction;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -46,6 +46,8 @@ pub enum GraphNode {
         id: ConflictId,
         description: String,
         objectives: Vec<ObjectiveId>,
+        #[serde(default)]
+        scene_id: Option<SceneId>,
     },
 }
 
@@ -89,18 +91,14 @@ pub enum Status {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum GraphEdge {
-    Pursues {
-        scene_id: Option<SceneId>,
-    },
+    Pursues { scene_id: Option<SceneId> },
     DecomposesInto,
     ConflictsWith,
     PresentIn,
     Advances,
     Blocks,
     Precedes,
-    Transforms {
-        trigger_scene: SceneId,
-    },
+    Transforms { trigger_scene: SceneId },
 }
 
 impl GraphEdge {
@@ -196,12 +194,7 @@ impl NarrativeGraph {
     }
 
     /// Add an edge between two nodes
-    pub fn add_edge(
-        &mut self,
-        from: &str,
-        to: &str,
-        edge: GraphEdge,
-    ) -> Option<()> {
+    pub fn add_edge(&mut self, from: &str, to: &str, edge: GraphEdge) -> Option<()> {
         let from_idx = *self.index_map.get(from)?;
         let to_idx = *self.index_map.get(to)?;
         self.graph.add_edge(from_idx, to_idx, edge);
@@ -219,6 +212,75 @@ impl NarrativeGraph {
     pub fn get_node(&self, id: &str) -> Option<&GraphNode> {
         let idx = *self.index_map.get(id)?;
         self.graph.node_weight(idx)
+    }
+
+    /// Remove scene-derived objectives, conflicts, and edges for a scene.
+    /// Optionally removes the scene node itself.
+    pub fn clear_scene_analysis(&mut self, scene_id: &str, remove_scene_node: bool) {
+        let objective_ids: HashSet<String> = self
+            .graph
+            .edge_indices()
+            .filter_map(|edge_idx| {
+                let edge = self.graph.edge_weight(edge_idx)?;
+                match edge {
+                    GraphEdge::Pursues {
+                        scene_id: Some(source_scene_id),
+                    } if source_scene_id == scene_id => {
+                        let (_, target_idx) = self.graph.edge_endpoints(edge_idx)?;
+                        Some(self.graph[target_idx].node_id().to_string())
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+
+        let conflict_ids: HashSet<String> = self
+            .graph
+            .node_weights()
+            .filter_map(|node| match node {
+                GraphNode::Conflict {
+                    id,
+                    scene_id: Some(source_scene_id),
+                    ..
+                } if source_scene_id == scene_id => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+
+        let edge_ids_to_remove: Vec<_> = if let Some(&scene_idx) = self.index_map.get(scene_id) {
+            let outgoing = self
+                .graph
+                .edges_directed(scene_idx, Direction::Outgoing)
+                .filter_map(|edge_ref| match edge_ref.weight() {
+                    GraphEdge::Advances | GraphEdge::Blocks => Some(edge_ref.id()),
+                    _ => None,
+                });
+            let incoming = self
+                .graph
+                .edges_directed(scene_idx, Direction::Incoming)
+                .filter_map(|edge_ref| match edge_ref.weight() {
+                    GraphEdge::PresentIn => Some(edge_ref.id()),
+                    _ => None,
+                });
+            outgoing.chain(incoming).collect()
+        } else {
+            Vec::new()
+        };
+
+        for edge_id in edge_ids_to_remove {
+            self.graph.remove_edge(edge_id);
+        }
+
+        for objective_id in objective_ids {
+            let _ = self.remove_node(&objective_id);
+        }
+        for conflict_id in conflict_ids {
+            let _ = self.remove_node(&conflict_id);
+        }
+
+        if remove_scene_node {
+            let _ = self.remove_node(scene_id);
+        }
     }
 
     /// Get all nodes of a given type
@@ -251,10 +313,7 @@ impl NarrativeGraph {
     }
 
     /// Get the character arc: ordered objective trajectory across scenes
-    pub fn get_character_arc(
-        &self,
-        character_id: &str,
-    ) -> Vec<ObjectiveState> {
+    pub fn get_character_arc(&self, character_id: &str) -> Vec<ObjectiveState> {
         let mut arc = Vec::new();
 
         // Find all objectives for this character
@@ -272,14 +331,9 @@ impl NarrativeGraph {
                     let obj_idx = self.index_map.get(id.as_str());
                     if let Some(&idx) = obj_idx {
                         // Check for Advances/Blocks edges pointing to this objective
-                        for edge_ref in
-                            self.graph.edges_directed(idx, Direction::Incoming)
-                        {
+                        for edge_ref in self.graph.edges_directed(idx, Direction::Incoming) {
                             let source = &self.graph[edge_ref.source()];
-                            if let GraphNode::Scene {
-                                id: scene_id, ..
-                            } = source
-                            {
+                            if let GraphNode::Scene { id: scene_id, .. } = source {
                                 arc.push(ObjectiveState {
                                     scene_id: scene_id.clone(),
                                     objective_id: id.clone(),
@@ -317,12 +371,7 @@ impl NarrativeGraph {
                     let has_advances_or_blocks = self
                         .graph
                         .edges_directed(idx, Direction::Outgoing)
-                        .any(|e| {
-                            matches!(
-                                e.weight(),
-                                GraphEdge::Advances | GraphEdge::Blocks
-                            )
-                        });
+                        .any(|e| matches!(e.weight(), GraphEdge::Advances | GraphEdge::Blocks));
 
                     if !has_advances_or_blocks {
                         dead.push(id.clone());
@@ -781,16 +830,10 @@ impl GraphDiff {
 
 /// Compare two graphs and return their differences
 pub fn diff_graphs(old: &NarrativeGraph, new: &NarrativeGraph) -> GraphDiff {
-    let old_ids: HashMap<&str, &GraphNode> = old
-        .graph
-        .node_weights()
-        .map(|n| (n.node_id(), n))
-        .collect();
-    let new_ids: HashMap<&str, &GraphNode> = new
-        .graph
-        .node_weights()
-        .map(|n| (n.node_id(), n))
-        .collect();
+    let old_ids: HashMap<&str, &GraphNode> =
+        old.graph.node_weights().map(|n| (n.node_id(), n)).collect();
+    let new_ids: HashMap<&str, &GraphNode> =
+        new.graph.node_weights().map(|n| (n.node_id(), n)).collect();
 
     let mut added_nodes = Vec::new();
     let mut removed_nodes = Vec::new();
@@ -1133,7 +1176,11 @@ mod tests {
             confidence: 0.8,
             status: Status::Active,
         });
-        g.add_edge(&char_id, &obj_advanced, GraphEdge::Pursues { scene_id: None });
+        g.add_edge(
+            &char_id,
+            &obj_advanced,
+            GraphEdge::Pursues { scene_id: None },
+        );
         g.add_edge(&scene_id, &obj_advanced, GraphEdge::Advances);
 
         let obj_blocked = new_id();
@@ -1146,7 +1193,11 @@ mod tests {
             confidence: 0.7,
             status: Status::Blocked,
         });
-        g.add_edge(&char_id, &obj_blocked, GraphEdge::Pursues { scene_id: None });
+        g.add_edge(
+            &char_id,
+            &obj_blocked,
+            GraphEdge::Pursues { scene_id: None },
+        );
         g.add_edge(&scene_id, &obj_blocked, GraphEdge::Blocks);
 
         let analysis = g.get_scene_analysis(&scene_id).unwrap();
@@ -1273,10 +1324,12 @@ mod tests {
         assert!(diff.added_nodes.is_empty());
         assert!(diff.removed_nodes.is_empty());
         assert_eq!(diff.changed_nodes.len(), 1);
-        assert!(diff.changed_nodes[0]
-            .fields
-            .iter()
-            .any(|f| f.contains("status")));
+        assert!(
+            diff.changed_nodes[0]
+                .fields
+                .iter()
+                .any(|f| f.contains("status"))
+        );
     }
 
     #[test]
@@ -1351,10 +1404,7 @@ mod tests {
         });
 
         let g = NarrativeGraph::deserialize(&json).unwrap();
-        assert_eq!(
-            g.get_node_field("scene-old", "file_path").unwrap(),
-            ""
-        );
+        assert_eq!(g.get_node_field("scene-old", "file_path").unwrap(), "");
     }
 
     #[test]
@@ -1365,12 +1415,16 @@ mod tests {
             id: "char-1".to_string(),
             name: "Alice".to_string(),
             aliases: vec!["Ali".to_string()],
-            description: Some("A very long description that should be excluded from the summary to save tokens.".to_string()),
+            description: Some(
+                "A very long description that should be excluded from the summary to save tokens."
+                    .to_string(),
+            ),
         });
         g.add_node(GraphNode::Scene {
             id: "scene-1".to_string(),
             title: Some("The Opening".to_string()),
-            summary: "A long scene summary that should not appear in the compact output.".to_string(),
+            summary: "A long scene summary that should not appear in the compact output."
+                .to_string(),
             characters_present: vec!["char-1".to_string()],
             location: Some("New York".to_string()),
             time: Some("Morning".to_string()),
@@ -1389,6 +1443,7 @@ mod tests {
             id: "conf-1".to_string(),
             description: "Internal struggle".to_string(),
             objectives: vec!["obj-1".to_string()],
+            scene_id: None,
         });
         g.add_edge("char-1", "obj-1", GraphEdge::Pursues { scene_id: None });
 
@@ -1528,5 +1583,67 @@ mod tests {
         let subgraph = g.serialize_subgraph(&["nonexistent"]);
         let parsed: serde_json::Value = serde_json::from_str(&subgraph).unwrap();
         assert_eq!(parsed["nodes"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_clear_scene_analysis_removes_scene_derived_state() {
+        let mut g = NarrativeGraph::new();
+        let scene_id = "scene-1".to_string();
+        let char_id = "char-1".to_string();
+        let obj_id = "obj-1".to_string();
+        let conflict_id = "conf-1".to_string();
+
+        g.add_node(GraphNode::Character {
+            id: char_id.clone(),
+            name: "Elena".to_string(),
+            aliases: vec![],
+            description: None,
+        });
+        g.add_node(GraphNode::Scene {
+            id: scene_id.clone(),
+            title: Some("Opening".to_string()),
+            summary: "A summary".to_string(),
+            characters_present: vec![char_id.clone()],
+            location: None,
+            time: None,
+            file_path: "story.md".to_string(),
+        });
+        g.add_node(GraphNode::Objective {
+            id: obj_id.clone(),
+            character_id: char_id.clone(),
+            scope: Scope::Scene,
+            description: "Find the letter".to_string(),
+            evidence: vec![],
+            confidence: 0.9,
+            status: Status::Active,
+        });
+        g.add_node(GraphNode::Conflict {
+            id: conflict_id.clone(),
+            description: "Elena vs Marcus".to_string(),
+            objectives: vec![char_id.clone()],
+            scene_id: Some(scene_id.clone()),
+        });
+        g.add_edge(&char_id, &scene_id, GraphEdge::PresentIn);
+        g.add_edge(
+            &char_id,
+            &obj_id,
+            GraphEdge::Pursues {
+                scene_id: Some(scene_id.clone()),
+            },
+        );
+        g.add_edge(&scene_id, &obj_id, GraphEdge::Advances);
+
+        g.clear_scene_analysis(&scene_id, false);
+
+        assert!(g.get_node(&scene_id).is_some(), "scene node should remain");
+        assert!(
+            g.get_node(&obj_id).is_none(),
+            "scene objective should be removed"
+        );
+        assert!(
+            g.get_node(&conflict_id).is_none(),
+            "scene conflict should be removed"
+        );
+        assert_eq!(g.edge_count(), 0, "scene-derived edges should be removed");
     }
 }

@@ -1,8 +1,8 @@
 use eframe::egui::{self, Color32, CornerRadius, RichText, Stroke};
 
+use crate::gui::ProjectSnapshot;
 use crate::gui::state::GuiState;
 use crate::gui::theme::LairesTheme;
-use crate::gui::ProjectSnapshot;
 
 /// Renders the revision brief panel.
 ///
@@ -39,9 +39,13 @@ pub fn render(
             .inner_margin(egui::Margin::symmetric(6, 2));
         count_badge.show(ui, |ui| {
             ui.label(
-                RichText::new(format!("{} revision{}", revision_count, if revision_count == 1 { "" } else { "s" }))
-                    .color(Color32::from_rgb(59, 130, 246))
-                    .size(11.0),
+                RichText::new(format!(
+                    "{} revision{}",
+                    revision_count,
+                    if revision_count == 1 { "" } else { "s" }
+                ))
+                .color(Color32::from_rgb(59, 130, 246))
+                .size(11.0),
             );
         });
     });
@@ -154,7 +158,12 @@ fn render_brief_markdown(ui: &mut egui::Ui, markdown: &str, theme: &LairesTheme)
             let quote_text = &trimmed[2..];
             egui::Frame::NONE
                 .fill(theme.bg_secondary)
-                .inner_margin(egui::Margin { left: 12, right: 8, top: 2, bottom: 2 })
+                .inner_margin(egui::Margin {
+                    left: 12,
+                    right: 8,
+                    top: 2,
+                    bottom: 2,
+                })
                 .stroke(Stroke::NONE)
                 .show(ui, |ui| {
                     // Left border bar
@@ -253,7 +262,11 @@ fn render_inline_bold(ui: &mut egui::Ui, text: &str, theme: &LairesTheme, size: 
         }
         // Remainder after last bold
         if !remaining.is_empty() {
-            ui.label(RichText::new(remaining).color(theme.text_primary).size(size));
+            ui.label(
+                RichText::new(remaining)
+                    .color(theme.text_primary)
+                    .size(size),
+            );
         }
     });
 }

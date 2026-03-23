@@ -110,7 +110,7 @@ impl Skills {
             None => {
                 return serde_json::json!({
                     "error": format!("Custom skill data not found: {skill_name}")
-                })
+                });
             }
         };
 
@@ -119,7 +119,7 @@ impl Skills {
             None => {
                 return serde_json::json!({
                     "error": "LLM provider required for custom skills"
-                })
+                });
             }
         };
 

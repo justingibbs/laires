@@ -8,13 +8,11 @@ use crate::error::{LairesError, Result};
 /// A .docx is a ZIP archive containing `word/document.xml` where text
 /// lives in `<w:t>` elements within `<w:p>` paragraphs.
 pub fn extract_text_from_docx(path: &Path) -> Result<String> {
-    let file = std::fs::File::open(path).map_err(|e| {
-        LairesError::DocxError(format!("cannot open {}: {e}", path.display()))
-    })?;
+    let file = std::fs::File::open(path)
+        .map_err(|e| LairesError::DocxError(format!("cannot open {}: {e}", path.display())))?;
 
-    let mut archive = zip::ZipArchive::new(file).map_err(|e| {
-        LairesError::DocxError(format!("invalid ZIP in {}: {e}", path.display()))
-    })?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| LairesError::DocxError(format!("invalid ZIP in {}: {e}", path.display())))?;
 
     let mut xml = String::new();
     archive
@@ -41,8 +39,8 @@ pub fn extract_text_from_docx(path: &Path) -> Result<String> {
 /// Text lives in `<w:t>` elements inside `<w:p>` paragraphs.
 /// Paragraphs are joined with double newlines; empty paragraphs are skipped.
 fn parse_document_xml(xml: &str) -> Result<String> {
-    use quick_xml::events::Event;
     use quick_xml::Reader;
+    use quick_xml::events::Event;
 
     let mut reader = Reader::from_str(xml);
     let mut paragraphs: Vec<String> = Vec::new();
@@ -195,6 +193,9 @@ mod tests {
         }
         let text1 = extract_text_from_docx(&path).unwrap();
         let text2 = extract_text_from_docx(&path).unwrap();
-        assert_eq!(text1, text2, "two extractions should produce identical text");
+        assert_eq!(
+            text1, text2,
+            "two extractions should produce identical text"
+        );
     }
 }

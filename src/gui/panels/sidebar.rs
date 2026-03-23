@@ -1,8 +1,8 @@
 use eframe::egui::{self, Color32, CornerRadius, RichText, Stroke, Vec2};
 
+use crate::gui::ProjectSnapshot;
 use crate::gui::state::{GuiState, RightTab, SidebarTab};
 use crate::gui::theme::LairesTheme;
-use crate::gui::ProjectSnapshot;
 
 const ROW_HEIGHT: f32 = 34.0;
 const ICON_WIDTH: f32 = 24.0;
@@ -56,10 +56,7 @@ pub fn render(
 
             // Thin separator
             let rect = ui.available_rect_before_wrap();
-            let sep_rect = egui::Rect::from_min_size(
-                rect.min,
-                Vec2::new(rect.width(), 1.0),
-            );
+            let sep_rect = egui::Rect::from_min_size(rect.min, Vec2::new(rect.width(), 1.0));
             ui.painter().rect_filled(sep_rect, 0.0, theme.border);
             ui.add_space(2.0);
 
@@ -134,10 +131,8 @@ fn render_nav_tab(
 
     // Active indicator bar (left edge)
     if is_active {
-        let bar_rect = egui::Rect::from_min_size(
-            rect.left_top(),
-            Vec2::new(ACTIVE_BAR_WIDTH, rect.height()),
-        );
+        let bar_rect =
+            egui::Rect::from_min_size(rect.left_top(), Vec2::new(ACTIVE_BAR_WIDTH, rect.height()));
         painter.rect_filled(bar_rect, CornerRadius::same(0), theme.accent);
     }
 
@@ -203,11 +198,10 @@ fn render_scenes(
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.add_space(LEFT_PAD);
-            let btn = egui::Button::new(
-                RichText::new("Scan Story").color(Color32::WHITE).size(12.0),
-            )
-            .fill(theme.accent)
-            .corner_radius(CornerRadius::same(6));
+            let btn =
+                egui::Button::new(RichText::new("Scan Story").color(Color32::WHITE).size(12.0))
+                    .fill(theme.accent)
+                    .corner_radius(CornerRadius::same(6));
             if ui.add(btn).clicked() {
                 state.scan_requested = true;
             }
@@ -243,9 +237,10 @@ fn render_scenes(
             let fallback = format!("Scene {}", global_idx);
             let label = title.as_deref().unwrap_or(&fallback);
             let is_selected = state.selected_scene_id.as_deref() == Some(id.as_str());
+            let is_stale = snap.pending_scene_ids.contains(id);
             let file_path = group.file_path.clone();
 
-            render_scene_row(ui, label, is_selected, theme, || {
+            render_scene_row(ui, label, is_selected, is_stale, theme, || {
                 state.selected_scene_id = Some(id.clone());
                 // Also select the file this scene belongs to
                 if !file_path.is_empty() {
@@ -261,6 +256,7 @@ fn render_scene_row(
     ui: &mut egui::Ui,
     label: &str,
     is_selected: bool,
+    is_stale: bool,
     theme: &LairesTheme,
     on_click: impl FnOnce(),
 ) {
@@ -292,10 +288,8 @@ fn render_scene_row(
             Color32::from_rgba_premultiplied(0x36, 0x4F, 0xC7, 18),
         );
         // Left accent bar
-        let bar_rect = egui::Rect::from_min_size(
-            rect.left_top(),
-            Vec2::new(ACTIVE_BAR_WIDTH, rect.height()),
-        );
+        let bar_rect =
+            egui::Rect::from_min_size(rect.left_top(), Vec2::new(ACTIVE_BAR_WIDTH, rect.height()));
         painter.rect_filled(bar_rect, CornerRadius::same(0), theme.accent);
     }
 
@@ -313,6 +307,17 @@ fn render_scene_row(
         egui::FontId::proportional(13.0),
         text_color,
     );
+
+    if is_stale {
+        let badge_pos = egui::pos2(rect.max.x - LEFT_PAD, rect.center().y);
+        painter.text(
+            badge_pos,
+            egui::Align2::RIGHT_CENTER,
+            "STALE",
+            egui::FontId::proportional(9.0),
+            Color32::from_rgb(180, 83, 9),
+        );
+    }
 }
 
 fn render_files(
@@ -355,7 +360,8 @@ fn render_files(
         ui.add_space(2.0);
         for path in &snap.story_files {
             let is_selected = state.selected_file.as_deref() == Some(path.as_str());
-            if render_file_row(ui, path, "story", is_selected, theme) {
+            let is_stale = snap.pending_story_files.contains(path);
+            if render_file_row(ui, path, "story", is_selected, is_stale, theme) {
                 state.selected_file = Some(path.clone());
                 state.selected_scene_id = None;
                 state.active_right_tab = RightTab::Canvas;
@@ -376,7 +382,7 @@ fn render_files(
         });
         ui.add_space(2.0);
         for path in &snap.context_files {
-            render_file_row(ui, path, "context", false, theme);
+            render_file_row(ui, path, "context", false, false, theme);
         }
     }
 }
@@ -387,6 +393,7 @@ fn render_file_row(
     path: &str,
     classification: &str,
     is_selected: bool,
+    is_stale: bool,
     theme: &LairesTheme,
 ) -> bool {
     let (rect, response) = ui.allocate_exact_size(
@@ -413,10 +420,8 @@ fn render_file_row(
             Color32::from_rgba_premultiplied(0x36, 0x4F, 0xC7, 18),
         );
         // Left accent bar
-        let bar_rect = egui::Rect::from_min_size(
-            rect.left_top(),
-            Vec2::new(ACTIVE_BAR_WIDTH, rect.height()),
-        );
+        let bar_rect =
+            egui::Rect::from_min_size(rect.left_top(), Vec2::new(ACTIVE_BAR_WIDTH, rect.height()));
         painter.rect_filled(bar_rect, CornerRadius::same(0), theme.accent);
     }
 
@@ -445,7 +450,11 @@ fn render_file_row(
         "story" => theme.accent,
         _ => theme.text_secondary,
     };
-    let badge_text = classification.to_uppercase();
+    let badge_text = if is_stale {
+        format!("{} · STALE", classification.to_uppercase())
+    } else {
+        classification.to_uppercase()
+    };
     let badge_pos = egui::pos2(rect.max.x - LEFT_PAD, rect.center().y);
     painter.text(
         badge_pos,

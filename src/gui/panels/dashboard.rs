@@ -1,9 +1,9 @@
 use eframe::egui::{self, Color32, CornerRadius, FontId, RichText, Stroke, Vec2};
 
-use crate::gui::state::GuiState;
-use crate::gui::panels::graph_view::GraphNodeInfo;
-use crate::gui::theme::LairesTheme;
 use crate::gui::ProjectSnapshot;
+use crate::gui::panels::graph_view::GraphNodeInfo;
+use crate::gui::state::GuiState;
+use crate::gui::theme::LairesTheme;
 
 /// Renders the Story Dashboard view — metrics, graph summary, and quick insights.
 pub fn render(
@@ -51,7 +51,9 @@ pub fn render(
                     ui.allocate_ui_with_layout(
                         Vec2::new(graph_w, row_h),
                         egui::Layout::top_down(egui::Align::LEFT),
-                        |ui| { render_graph_card(ui, snap, theme); },
+                        |ui| {
+                            render_graph_card(ui, snap, theme);
+                        },
                     );
 
                     ui.add_space(4.0);
@@ -59,7 +61,9 @@ pub fn render(
                     ui.allocate_ui_with_layout(
                         Vec2::new(overview_w, row_h),
                         egui::Layout::top_down(egui::Align::LEFT),
-                        |ui| { render_overview_card(ui, state, snap, theme); },
+                        |ui| {
+                            render_overview_card(ui, state, snap, theme);
+                        },
                     );
                 });
             }
@@ -73,11 +77,7 @@ pub fn render(
 
 /// The Narrative Graph summary card — shows node/edge counts and legend.
 /// The full interactive graph is on the Graph tab.
-fn render_graph_card(
-    ui: &mut egui::Ui,
-    snap: &ProjectSnapshot,
-    theme: &LairesTheme,
-) {
+fn render_graph_card(ui: &mut egui::Ui, snap: &ProjectSnapshot, theme: &LairesTheme) {
     theme.card_frame().show(ui, |ui| {
         let w = ui.available_width();
         ui.set_min_width(w);
@@ -133,7 +133,12 @@ fn render_graph_card(
                 ("Conflicts", conflicts, theme.conflict_color),
             ];
 
-            let max_count = categories.iter().map(|(_, c, _)| *c).max().unwrap_or(1).max(1);
+            let max_count = categories
+                .iter()
+                .map(|(_, c, _)| *c)
+                .max()
+                .unwrap_or(1)
+                .max(1);
 
             for (label, count, color) in &categories {
                 if *count == 0 {
@@ -142,7 +147,8 @@ fn render_graph_card(
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     // Colored dot
-                    let (dot_rect, _) = ui.allocate_exact_size(Vec2::splat(10.0), egui::Sense::hover());
+                    let (dot_rect, _) =
+                        ui.allocate_exact_size(Vec2::splat(10.0), egui::Sense::hover());
                     ui.painter().circle_filled(dot_rect.center(), 5.0, *color);
 
                     ui.label(
@@ -161,31 +167,36 @@ fn render_graph_card(
                 // Bar
                 let bar_w = ui.available_width();
                 let bar_h = 6.0;
-                let (rect, _) = ui.allocate_exact_size(Vec2::new(bar_w, bar_h), egui::Sense::hover());
-                ui.painter().rect_filled(rect, CornerRadius::same(3), theme.bg_input);
+                let (rect, _) =
+                    ui.allocate_exact_size(Vec2::new(bar_w, bar_h), egui::Sense::hover());
+                ui.painter()
+                    .rect_filled(rect, CornerRadius::same(3), theme.bg_input);
                 let frac = *count as f32 / max_count as f32;
                 let filled = egui::Rect::from_min_size(
                     rect.min,
                     Vec2::new(rect.width() * frac, rect.height()),
                 );
-                ui.painter().rect_filled(filled, CornerRadius::same(3), *color);
+                ui.painter()
+                    .rect_filled(filled, CornerRadius::same(3), *color);
             }
 
             // Legend at bottom
             ui.add_space(16.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Graph Legend").color(theme.text_secondary).size(10.0).strong());
+                ui.label(
+                    RichText::new("Graph Legend")
+                        .color(theme.text_secondary)
+                        .size(10.0)
+                        .strong(),
+                );
             });
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 for (label, _, color) in &categories {
-                    let (dot_rect, _) = ui.allocate_exact_size(Vec2::splat(8.0), egui::Sense::hover());
+                    let (dot_rect, _) =
+                        ui.allocate_exact_size(Vec2::splat(8.0), egui::Sense::hover());
                     ui.painter().circle_filled(dot_rect.center(), 4.0, *color);
-                    ui.label(
-                        RichText::new(*label)
-                            .color(theme.text_secondary)
-                            .size(10.0),
-                    );
+                    ui.label(RichText::new(*label).color(theme.text_secondary).size(10.0));
                     ui.add_space(8.0);
                 }
             });
@@ -219,9 +230,25 @@ fn render_overview_card(
 
         // Row 1: Words + Characters
         ui.horizontal(|ui| {
-            render_metric_tile(ui, tile_w, tile_h, "WORDS", &format_number(state.word_count), theme.accent, theme);
+            render_metric_tile(
+                ui,
+                tile_w,
+                tile_h,
+                "WORDS",
+                &format_number(state.word_count),
+                theme.accent,
+                theme,
+            );
             ui.add_space(4.0);
-            render_metric_tile(ui, tile_w, tile_h, "CHARACTERS", &state.char_count.to_string(), theme.objective_color, theme);
+            render_metric_tile(
+                ui,
+                tile_w,
+                tile_h,
+                "CHARACTERS",
+                &state.char_count.to_string(),
+                theme.objective_color,
+                theme,
+            );
         });
         ui.add_space(4.0);
 
@@ -231,7 +258,11 @@ fn render_overview_card(
         // Use total_scenes as the cap since graph "scene" nodes can outnumber
         // actual parsed scenes (acts, parts, sub-headings all become scene nodes).
         let has_analysis = count_by_type(&snap.graph_nodes, "scene") > 0;
-        let analyzed = if has_analysis { total_scenes } else { 0 };
+        let analyzed = if has_analysis {
+            total_scenes.saturating_sub(snap.pending_scene_count)
+        } else {
+            0
+        };
         let pct = if total_scenes > 0 {
             (analyzed as f32 / total_scenes as f32 * 100.0) as usize
         } else {
@@ -239,9 +270,25 @@ fn render_overview_card(
         };
 
         ui.horizontal(|ui| {
-            render_metric_tile(ui, tile_w, tile_h, "SCENES", &total_scenes.to_string(), theme.scene_color, theme);
+            render_metric_tile(
+                ui,
+                tile_w,
+                tile_h,
+                "SCENES",
+                &total_scenes.to_string(),
+                theme.scene_color,
+                theme,
+            );
             ui.add_space(4.0);
-            render_metric_tile(ui, tile_w, tile_h, "ANALYZED", &format!("{}%", pct), theme.accent_secondary, theme);
+            render_metric_tile(
+                ui,
+                tile_w,
+                tile_h,
+                "ANALYZED",
+                &format!("{}%", pct),
+                theme.accent_secondary,
+                theme,
+            );
         });
 
         ui.add_space(16.0);
@@ -265,13 +312,20 @@ fn render_overview_card(
 
         ui.add_space(4.0);
         ui.label(
-            RichText::new(format!(
-                "{} of {} scenes analyzed",
-                analyzed, total_scenes
-            ))
-            .color(theme.text_secondary)
-            .size(11.0),
+            RichText::new(format!("{} of {} scenes analyzed", analyzed, total_scenes))
+                .color(theme.text_secondary)
+                .size(11.0),
         );
+
+        if state.review_pending {
+            ui.add_space(12.0);
+            render_pending_review_callout(ui, state, theme);
+        }
+
+        if let Some(review) = &snap.latest_change_review {
+            ui.add_space(12.0);
+            render_latest_review_callout(ui, review, theme);
+        }
 
         // Laires Insight callout (if we have characters)
         if state.char_count > 0 {
@@ -322,11 +376,7 @@ fn render_progress_bar(ui: &mut egui::Ui, fraction: f32, theme: &LairesTheme) {
     let painter = ui.painter();
 
     // Background track
-    painter.rect_filled(
-        rect,
-        CornerRadius::same(4),
-        theme.bg_input,
-    );
+    painter.rect_filled(rect, CornerRadius::same(4), theme.bg_input);
 
     // Filled portion
     if fraction > 0.0 {
@@ -334,12 +384,123 @@ fn render_progress_bar(ui: &mut egui::Ui, fraction: f32, theme: &LairesTheme) {
             rect.min,
             Vec2::new(rect.width() * fraction.clamp(0.0, 1.0), rect.height()),
         );
-        painter.rect_filled(
-            filled_rect,
-            CornerRadius::same(4),
-            theme.accent,
-        );
+        painter.rect_filled(filled_rect, CornerRadius::same(4), theme.accent);
     }
+}
+
+fn render_pending_review_callout(ui: &mut egui::Ui, state: &GuiState, theme: &LairesTheme) {
+    egui::Frame::NONE
+        .fill(Color32::from_rgba_premultiplied(245, 158, 11, 18))
+        .stroke(Stroke::new(
+            1.0,
+            Color32::from_rgba_premultiplied(245, 158, 11, 96),
+        ))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(egui::Margin::same(12))
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new("REVIEW PENDING")
+                    .color(Color32::from_rgb(180, 83, 9))
+                    .size(10.0)
+                    .strong(),
+            );
+            if let Some(text) = &state.review_status_text {
+                ui.add_space(4.0);
+                ui.label(RichText::new(text).color(theme.text_primary).size(12.0));
+            }
+        });
+}
+
+fn render_latest_review_callout(
+    ui: &mut egui::Ui,
+    review: &crate::gui::state::StoryChangeReview,
+    theme: &LairesTheme,
+) {
+    egui::Frame::NONE
+        .fill(Color32::from_rgba_premultiplied(59, 130, 246, 16))
+        .stroke(Stroke::new(
+            1.0,
+            Color32::from_rgba_premultiplied(59, 130, 246, 96),
+        ))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(egui::Margin::same(12))
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new("LATEST CHANGE REVIEW")
+                    .color(Color32::from_rgb(29, 78, 216))
+                    .size(10.0)
+                    .strong(),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(review.summary())
+                    .color(theme.text_primary)
+                    .size(12.0),
+            );
+            ui.add_space(8.0);
+
+            render_review_metric_row(
+                ui,
+                "Stale scenes",
+                review.before.stale_scene_count.to_string(),
+                review.after.stale_scene_count.to_string(),
+                theme,
+            );
+            render_review_metric_row(
+                ui,
+                "Dead scenes",
+                review.before.dead_scene_count.to_string(),
+                review.after.dead_scene_count.to_string(),
+                theme,
+            );
+            render_review_metric_row(
+                ui,
+                "Divergences",
+                review.before.divergence_count.to_string(),
+                review.after.divergence_count.to_string(),
+                theme,
+            );
+            render_review_metric_row(
+                ui,
+                "Arc completion",
+                format!("{}%", review.before.average_arc_completion_percent),
+                format!("{}%", review.after.average_arc_completion_percent),
+                theme,
+            );
+            render_review_metric_row(
+                ui,
+                "Conflict density",
+                format!("{:.2}/scene", review.before.conflict_density),
+                format!("{:.2}/scene", review.after.conflict_density),
+                theme,
+            );
+        });
+}
+
+fn render_review_metric_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    before: String,
+    after: String,
+    theme: &LairesTheme,
+) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(label).color(theme.text_secondary).size(11.0));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                RichText::new(after)
+                    .color(theme.text_primary)
+                    .size(11.0)
+                    .strong(),
+            );
+            ui.label(
+                RichText::new("\u{2192}")
+                    .color(theme.text_secondary)
+                    .size(11.0),
+            );
+            ui.label(RichText::new(before).color(theme.text_secondary).size(11.0));
+        });
+    });
 }
 
 /// A highlighted insight callout box.
@@ -372,11 +533,7 @@ fn render_insight_callout(
 
             // Generate a simple insight based on available data
             let insight = generate_insight(state, snap);
-            ui.label(
-                RichText::new(insight)
-                    .color(theme.text_primary)
-                    .size(12.0),
-            );
+            ui.label(RichText::new(insight).color(theme.text_primary).size(12.0));
         });
 }
 
@@ -406,19 +563,25 @@ fn render_insights_row(ui: &mut egui::Ui, snap: &ProjectSnapshot, theme: &Laires
             ui.allocate_ui_with_layout(
                 Vec2::new(card_w, 160.0),
                 egui::Layout::top_down(egui::Align::LEFT),
-                |ui| { render_character_arcs_card(ui, snap, theme); },
+                |ui| {
+                    render_character_arcs_card(ui, snap, theme);
+                },
             );
             ui.add_space(4.0);
             ui.allocate_ui_with_layout(
                 Vec2::new(card_w, 160.0),
                 egui::Layout::top_down(egui::Align::LEFT),
-                |ui| { render_pacing_card(ui, snap, theme); },
+                |ui| {
+                    render_pacing_card(ui, snap, theme);
+                },
             );
             ui.add_space(4.0);
             ui.allocate_ui_with_layout(
                 Vec2::new(card_w, 160.0),
                 egui::Layout::top_down(egui::Align::LEFT),
-                |ui| { render_conflicts_card(ui, snap, theme); },
+                |ui| {
+                    render_conflicts_card(ui, snap, theme);
+                },
             );
         });
     }
@@ -461,7 +624,8 @@ fn render_character_arcs_card(ui: &mut egui::Ui, snap: &ProjectSnapshot, theme: 
                 ui.horizontal(|ui| {
                     // Colored dot
                     let (rect, _) = ui.allocate_exact_size(Vec2::splat(8.0), egui::Sense::hover());
-                    ui.painter().circle_filled(rect.center(), 4.0, theme.character_color);
+                    ui.painter()
+                        .circle_filled(rect.center(), 4.0, theme.character_color);
 
                     ui.label(
                         RichText::new(&ch.label)
@@ -538,20 +702,18 @@ fn render_pacing_card(ui: &mut egui::Ui, snap: &ProjectSnapshot, theme: &LairesT
         let display_count = scene_words.len().min(12);
         for wc in scene_words.iter().take(display_count) {
             let frac = *wc as f32 / max_wc as f32;
-            let (rect, _) = ui.allocate_exact_size(
-                Vec2::new(bar_area_w, bar_h),
-                egui::Sense::hover(),
-            );
+            let (rect, _) =
+                ui.allocate_exact_size(Vec2::new(bar_area_w, bar_h), egui::Sense::hover());
 
             // Background
-            ui.painter().rect_filled(rect, CornerRadius::same(2), theme.bg_input);
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(2), theme.bg_input);
 
             // Filled bar
-            let bar_rect = egui::Rect::from_min_size(
-                rect.min,
-                Vec2::new(rect.width() * frac, rect.height()),
-            );
-            ui.painter().rect_filled(bar_rect, CornerRadius::same(2), theme.accent);
+            let bar_rect =
+                egui::Rect::from_min_size(rect.min, Vec2::new(rect.width() * frac, rect.height()));
+            ui.painter()
+                .rect_filled(bar_rect, CornerRadius::same(2), theme.accent);
 
             ui.add_space(gap);
         }
@@ -604,13 +766,25 @@ fn render_conflicts_card(ui: &mut egui::Ui, snap: &ProjectSnapshot, theme: &Lair
 
         // Conflict count bar
         if !conflicts.is_empty() {
-            render_density_row(ui, "Conflicts", conflicts.len(), theme.conflict_color, theme);
+            render_density_row(
+                ui,
+                "Conflicts",
+                conflicts.len(),
+                theme.conflict_color,
+                theme,
+            );
             ui.add_space(6.0);
         }
 
         // Objective count bar
         if !objectives.is_empty() {
-            render_density_row(ui, "Objectives", objectives.len(), theme.objective_color, theme);
+            render_density_row(
+                ui,
+                "Objectives",
+                objectives.len(),
+                theme.objective_color,
+                theme,
+            );
             ui.add_space(6.0);
         }
 
@@ -635,11 +809,7 @@ fn render_density_row(
     theme: &LairesTheme,
 ) {
     ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(label)
-                .color(theme.text_primary)
-                .size(11.0),
-        );
+        ui.label(RichText::new(label).color(theme.text_primary).size(11.0));
         ui.label(
             RichText::new(count.to_string())
                 .color(color)
@@ -653,15 +823,14 @@ fn render_density_row(
     let bar_h = 6.0;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(bar_w, bar_h), egui::Sense::hover());
 
-    ui.painter().rect_filled(rect, CornerRadius::same(3), theme.bg_input);
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(3), theme.bg_input);
 
     // Filled portion — scale relative to 10 (arbitrary ceiling for visual)
     let frac = (count as f32 / 10.0).clamp(0.0, 1.0);
-    let filled = egui::Rect::from_min_size(
-        rect.min,
-        Vec2::new(rect.width() * frac, rect.height()),
-    );
-    ui.painter().rect_filled(filled, CornerRadius::same(3), color);
+    let filled = egui::Rect::from_min_size(rect.min, Vec2::new(rect.width() * frac, rect.height()));
+    ui.painter()
+        .rect_filled(filled, CornerRadius::same(3), color);
 }
 
 /// Generate a simple text insight from available data.

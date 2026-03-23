@@ -1,4 +1,6 @@
-use eframe::egui::{self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, Stroke, Style, Visuals};
+use eframe::egui::{
+    self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, Stroke, Style, Visuals,
+};
 use eframe::epaint::Shadow;
 
 /// The "prose" font family name — used for story text in the canvas.

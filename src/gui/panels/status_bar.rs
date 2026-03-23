@@ -1,10 +1,16 @@
 use eframe::egui::{self, Color32, CornerRadius, RichText, Stroke};
 
+use crate::gui::ProjectSnapshot;
 use crate::gui::state::{AgentStatus, AppMode, GuiState, SessionMode};
 use crate::gui::theme::LairesTheme;
 
 /// Renders the top navigation bar (branded header with search + actions).
-pub fn render(ctx: &egui::Context, state: &GuiState, theme: &LairesTheme) {
+pub fn render(
+    ctx: &egui::Context,
+    state: &GuiState,
+    snapshot: &Option<ProjectSnapshot>,
+    theme: &LairesTheme,
+) {
     if state.app_mode != AppMode::Project {
         return;
     }
@@ -26,11 +32,7 @@ pub fn render(ctx: &egui::Context, state: &GuiState, theme: &LairesTheme) {
             ui.horizontal_centered(|ui| {
                 ui.set_max_width(bar_width);
                 // === Left section: Branding ===
-                ui.label(
-                    RichText::new("\u{25C8}")
-                        .color(theme.accent)
-                        .size(22.0),
-                );
+                ui.label(RichText::new("\u{25C8}").color(theme.accent).size(22.0));
                 ui.add_space(4.0);
                 ui.vertical(|ui| {
                     ui.add_space(8.0);
@@ -53,11 +55,7 @@ pub fn render(ctx: &egui::Context, state: &GuiState, theme: &LairesTheme) {
 
                 // === Center-left: Project title + provider info ===
                 if !state.project_title.is_empty() {
-                    ui.label(
-                        RichText::new("\u{2502}")
-                            .color(theme.border)
-                            .size(20.0),
-                    );
+                    ui.label(RichText::new("\u{2502}").color(theme.border).size(20.0));
                     ui.add_space(8.0);
                     ui.vertical(|ui| {
                         ui.add_space(8.0);
@@ -73,9 +71,12 @@ pub fn render(ctx: &egui::Context, state: &GuiState, theme: &LairesTheme) {
                         }
                         if !is_very_narrow && !state.model_name.is_empty() {
                             ui.label(
-                                RichText::new(format!("{} \u{00B7} {}", state.privacy_label, state.model_name))
-                                    .color(theme.text_secondary)
-                                    .size(11.0),
+                                RichText::new(format!(
+                                    "{} \u{00B7} {}",
+                                    state.privacy_label, state.model_name
+                                ))
+                                .color(theme.text_secondary)
+                                .size(11.0),
                             );
                         }
                     });
@@ -102,8 +103,7 @@ pub fn render(ctx: &egui::Context, state: &GuiState, theme: &LairesTheme) {
                 };
                 if ui.add(btn).on_hover_text(tooltip).clicked() {
                     ctx.memory_mut(|mem| {
-                        mem.data
-                            .insert_temp(egui::Id::new("switch_mode"), true);
+                        mem.data.insert_temp(egui::Id::new("switch_mode"), true);
                     });
                 }
 
@@ -138,11 +138,12 @@ pub fn render(ctx: &egui::Context, state: &GuiState, theme: &LairesTheme) {
                 // === Right section: Stats + Actions ===
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Settings (rightmost)
-                    let gear = RichText::new("\u{2699}").size(18.0).color(theme.text_secondary);
+                    let gear = RichText::new("\u{2699}")
+                        .size(18.0)
+                        .color(theme.text_secondary);
                     if ui.link(gear).on_hover_text("Settings (Cmd+,)").clicked() {
                         ctx.memory_mut(|mem| {
-                            mem.data
-                                .insert_temp(egui::Id::new("open_settings"), true);
+                            mem.data.insert_temp(egui::Id::new("open_settings"), true);
                         });
                     }
 
@@ -188,6 +189,40 @@ pub fn render(ctx: &egui::Context, state: &GuiState, theme: &LairesTheme) {
                         }
                     }
 
+                    if state.review_pending {
+                        ui.add_space(8.0);
+                        let pending_label = snapshot
+                            .as_ref()
+                            .map(|snap| {
+                                format!(
+                                    "{} stale {}",
+                                    snap.pending_scene_count,
+                                    if snap.pending_scene_count == 1 {
+                                        "scene"
+                                    } else {
+                                        "scenes"
+                                    }
+                                )
+                            })
+                            .unwrap_or_else(|| "Review pending".to_string());
+                        let review_btn = egui::Button::new(
+                            RichText::new(pending_label)
+                                .color(Color32::from_rgb(180, 83, 9))
+                                .size(10.0)
+                                .strong(),
+                        )
+                        .fill(Color32::from_rgba_premultiplied(245, 158, 11, 28))
+                        .stroke(Stroke::new(
+                            1.0,
+                            Color32::from_rgba_premultiplied(245, 158, 11, 80),
+                        ))
+                        .corner_radius(CornerRadius::same(4));
+                        let response = ui.add(review_btn);
+                        if let Some(text) = &state.review_status_text {
+                            response.on_hover_text(text);
+                        }
+                    }
+
                     // Compact stats (hide on very narrow)
                     if !is_very_narrow {
                         ui.add_space(8.0);
@@ -204,11 +239,7 @@ pub fn render(ctx: &egui::Context, state: &GuiState, theme: &LairesTheme) {
                     if !is_narrow {
                         if let Some(usage) = &state.last_usage {
                             ui.add_space(8.0);
-                            ui.label(
-                                RichText::new(usage)
-                                    .color(theme.text_secondary)
-                                    .size(10.0),
-                            );
+                            ui.label(RichText::new(usage).color(theme.text_secondary).size(10.0));
                         }
                     }
                 });

@@ -1,6 +1,4 @@
-use super::{
-    Permission, SkillCategory, SkillDefinition, SkillSetContext, Skills,
-};
+use super::{Permission, SkillCategory, SkillDefinition, SkillSetContext, Skills};
 
 impl Skills {
     pub(super) fn register_defaults(&mut self) {
@@ -43,7 +41,8 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "story_stats".to_string(),
-            description: "Get manuscript statistics: word, scene, and character counts.".to_string(),
+            description: "Get manuscript statistics: word, scene, and character counts."
+                .to_string(),
             category: SkillCategory::FileTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -178,7 +177,8 @@ impl Skills {
 
         self.register(SkillDefinition {
             name: "find_blind_spots".to_string(),
-            description: "Find dramatic irony where a character lacks reader knowledge.".to_string(),
+            description: "Find dramatic irony where a character lacks reader knowledge."
+                .to_string(),
             category: SkillCategory::PerspectiveTools,
             input_schema: serde_json::json!({
                 "type": "object",
@@ -444,5 +444,4 @@ impl Skills {
             })
             .collect()
     }
-
 }

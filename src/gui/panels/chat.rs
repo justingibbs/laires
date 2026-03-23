@@ -96,20 +96,12 @@ fn render_header(ui: &mut egui::Ui, state: &mut GuiState, theme: &LairesTheme) {
             let painter = ui.painter();
 
             // Background track
-            painter.rect_filled(
-                rect,
-                CornerRadius::same(4),
-                theme.bg_input,
-            );
+            painter.rect_filled(rect, CornerRadius::same(4), theme.bg_input);
 
             // Filled portion
             let fill_width = (rect.width() * (percent / 100.0)).min(rect.width());
             let fill_rect = egui::Rect::from_min_size(rect.min, Vec2::new(fill_width, bar_height));
-            painter.rect_filled(
-                fill_rect,
-                CornerRadius::same(4),
-                context_bar_color(percent),
-            );
+            painter.rect_filled(fill_rect, CornerRadius::same(4), context_bar_color(percent));
 
             ui.add_space(4.0);
 

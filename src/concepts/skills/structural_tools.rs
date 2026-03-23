@@ -168,7 +168,12 @@ impl Skills {
             let total = arc.len();
             let resolved = arc
                 .iter()
-                .filter(|o| matches!(o.status, Status::Achieved | Status::Abandoned | Status::Transformed))
+                .filter(|o| {
+                    matches!(
+                        o.status,
+                        Status::Achieved | Status::Abandoned | Status::Transformed
+                    )
+                })
                 .count();
             let unresolved: Vec<_> = arc
                 .iter()

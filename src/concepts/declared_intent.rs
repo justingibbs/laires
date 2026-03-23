@@ -159,7 +159,12 @@ mod tests {
     #[test]
     fn test_declare_and_get() {
         let mut intent = DeclaredIntent::new();
-        intent.declare("node1", "description", "Revenge".to_string(), Some("Writer override".to_string()));
+        intent.declare(
+            "node1",
+            "description",
+            "Revenge".to_string(),
+            Some("Writer override".to_string()),
+        );
 
         let decl = intent.get_declaration("node1", "description").unwrap();
         assert_eq!(decl.value, "Revenge");
@@ -198,7 +203,12 @@ mod tests {
     #[test]
     fn test_save_load_roundtrip() {
         let mut intent = DeclaredIntent::new();
-        intent.declare("n1", "desc", "Value 1".to_string(), Some("Reason".to_string()));
+        intent.declare(
+            "n1",
+            "desc",
+            "Value 1".to_string(),
+            Some("Reason".to_string()),
+        );
         intent.declare("n2", "status", "Active".to_string(), None);
 
         let dir = std::env::temp_dir().join("laires_test_decl");

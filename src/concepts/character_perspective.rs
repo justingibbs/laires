@@ -129,9 +129,7 @@ impl CharacterPerspective {
             scene_perspectives: self
                 .scene_perspectives
                 .iter()
-                .map(|((cid, sid), sp)| {
-                    (format!("{cid}::{sid}"), sp.clone())
-                })
+                .map(|((cid, sid), sp)| (format!("{cid}::{sid}"), sp.clone()))
                 .collect(),
         };
         let json = serde_json::to_string_pretty(&wrapper)?;
@@ -216,10 +214,7 @@ impl CharacterPerspective {
         // Use scene summaries from the graph instead of full text
         let mut scene_texts = Vec::new();
         for scene_id in &knowledge_boundary {
-            if let Some(GraphNode::Scene {
-                title, summary, ..
-            }) = graph.get_node(scene_id)
-            {
+            if let Some(GraphNode::Scene { title, summary, .. }) = graph.get_node(scene_id) {
                 let title = title.as_deref().unwrap_or("(untitled)");
                 scene_texts.push(format!("Scene \"{title}\" ({scene_id}):\n{summary}"));
             }
@@ -250,8 +245,8 @@ impl CharacterPerspective {
 
         let response = provider.complete(&messages, &[], Some(system)).await?;
         let raw = response.content.unwrap_or_default();
-        let parsed = crate::concepts::analysis::extract_json(&raw)
-            .unwrap_or_else(|| serde_json::json!({}));
+        let parsed =
+            crate::concepts::analysis::extract_json(&raw).unwrap_or_else(|| serde_json::json!({}));
 
         let filtered_arc = parsed["filtered_arc"]
             .as_array()
@@ -341,8 +336,8 @@ impl CharacterPerspective {
 
         let response = provider.complete(&messages, &[], Some(system)).await?;
         let raw = response.content.unwrap_or_default();
-        let parsed = crate::concepts::analysis::extract_json(&raw)
-            .unwrap_or_else(|| serde_json::json!({}));
+        let parsed =
+            crate::concepts::analysis::extract_json(&raw).unwrap_or_else(|| serde_json::json!({}));
 
         let sp = ScenePerspective {
             character_id: character_id.to_string(),
@@ -351,10 +346,7 @@ impl CharacterPerspective {
             perceives: parsed["perceives"].as_str().unwrap_or("").to_string(),
             decides: parsed["decides"].as_str().unwrap_or("").to_string(),
             blocked_by: parsed["blocked_by"].as_str().map(String::from),
-            emotional_state: parsed["emotional_state"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
+            emotional_state: parsed["emotional_state"].as_str().unwrap_or("").to_string(),
             knowledge_gained: parsed["knowledge_gained"]
                 .as_array()
                 .map(|a| {
@@ -363,9 +355,7 @@ impl CharacterPerspective {
                         .collect()
                 })
                 .unwrap_or_default(),
-            content_hash: blake3::hash(scene_text.as_bytes())
-                .to_hex()
-                .to_string(),
+            content_hash: blake3::hash(scene_text.as_bytes()).to_hex().to_string(),
         };
 
         self.store_scene_perspective(sp.clone());
@@ -418,8 +408,8 @@ impl CharacterPerspective {
             .complete(&messages, &[], Some("You are a narrative analysis engine."))
             .await?;
         let raw = response.content.unwrap_or_default();
-        let parsed = crate::concepts::analysis::extract_json(&raw)
-            .unwrap_or_else(|| serde_json::json!({}));
+        let parsed =
+            crate::concepts::analysis::extract_json(&raw).unwrap_or_else(|| serde_json::json!({}));
 
         let divergences = parsed["divergences"]
             .as_array()
@@ -831,10 +821,7 @@ mod tests {
 
         let mut scene_texts = Vec::new();
         for scene_id in &kb {
-            if let Some(GraphNode::Scene {
-                title, summary, ..
-            }) = g.get_node(scene_id)
-            {
+            if let Some(GraphNode::Scene { title, summary, .. }) = g.get_node(scene_id) {
                 let title = title.as_deref().unwrap_or("(untitled)");
                 scene_texts.push(format!("Scene \"{title}\" ({scene_id}):\n{summary}"));
             }
@@ -850,8 +837,7 @@ mod tests {
         // Verify unseen scenes are collected from graph nodes with summaries
         let g = make_test_graph();
         let character_id = "char_a";
-        let knowledge_boundary =
-            CharacterPerspective::compute_knowledge_boundary(&g, character_id);
+        let knowledge_boundary = CharacterPerspective::compute_knowledge_boundary(&g, character_id);
 
         let mut unseen_scenes = Vec::new();
         for scene_node in g.get_scenes() {

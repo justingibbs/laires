@@ -9,7 +9,7 @@ use crate::concepts::provider::Provider;
 use crate::concepts::scene_map::{ParseMode, SceneMap};
 use crate::concepts::skills::{Permission, Skills};
 use crate::concepts::text_buffer::TextBuffer;
-use crate::config::{self, ProjectConfig, LAIRES_DIR, OVERRIDES_FILE, PERSPECTIVES_CACHE_DIR};
+use crate::config::{self, LAIRES_DIR, OVERRIDES_FILE, PERSPECTIVES_CACHE_DIR, ProjectConfig};
 use crate::runtime::story_access::StoryAccess;
 
 pub struct LoadedProject {
@@ -146,16 +146,11 @@ mod tests {
     use crate::concepts::manifest::{Manifest, ManifestMeta, StoryFile};
     use crate::concepts::narrative_graph::{GraphNode, NarrativeGraph};
     use crate::config::{
-        AnalysisConfig, ClassificationConfig, LlmConfig, PrivacyConfig, ProjectConfig, ProjectMeta,
-        GRAPH_FILE, LAIRES_DIR, OVERRIDES_FILE, PERSPECTIVES_CACHE_DIR,
+        AnalysisConfig, ClassificationConfig, GRAPH_FILE, LAIRES_DIR, LlmConfig, OVERRIDES_FILE,
+        PERSPECTIVES_CACHE_DIR, PrivacyConfig, ProjectConfig, ProjectMeta,
     };
 
-    fn write_config(
-        root: &Path,
-        provider: &str,
-        model: &str,
-        restricted_when_cloud: Vec<&str>,
-    ) {
+    fn write_config(root: &Path, provider: &str, model: &str, restricted_when_cloud: Vec<&str>) {
         std::fs::create_dir_all(root.join(LAIRES_DIR)).unwrap();
         let config = ProjectConfig {
             llm: LlmConfig {
@@ -203,9 +198,7 @@ mod tests {
 
     fn write_graph(root: &Path) -> NarrativeGraph {
         let graph = build_graph();
-        graph
-            .save(&root.join(LAIRES_DIR).join(GRAPH_FILE))
-            .unwrap();
+        graph.save(&root.join(LAIRES_DIR).join(GRAPH_FILE)).unwrap();
         graph
     }
 
@@ -287,7 +280,12 @@ mod tests {
     #[test]
     fn loads_manifest_project_with_cloud_permissions_and_aggregate_summary() {
         let tmp = tempfile::tempdir().unwrap();
-        write_config(tmp.path(), "anthropic", "claude-sonnet-4-6", vec!["story_grep"]);
+        write_config(
+            tmp.path(),
+            "anthropic",
+            "claude-sonnet-4-6",
+            vec!["story_grep"],
+        );
         write_manifest_project(tmp.path());
         write_graph(tmp.path());
         write_overrides(tmp.path());
@@ -306,14 +304,7 @@ mod tests {
         assert_eq!(result.summary.scene_count, 3);
         assert_eq!(result.summary.char_count, 1);
         assert!(result.project.manifest.is_some());
-        assert_eq!(
-            result
-                .project
-                .intent
-                .list_declarations()
-                .len(),
-            1
-        );
+        assert_eq!(result.project.intent.list_declarations().len(), 1);
         assert!(result.project.file_buffer_manager.is_some());
         assert_eq!(
             result.summary.word_count,
@@ -325,11 +316,13 @@ mod tests {
                 .total_word_count()
         );
         assert!(!tool_names.iter().any(|name| name == "story_grep"));
-        assert!(result
-            .project
-            .perspectives
-            .get_perspective("char-marcus")
-            .is_none());
+        assert!(
+            result
+                .project
+                .perspectives
+                .get_perspective("char-marcus")
+                .is_none()
+        );
     }
 
     #[test]

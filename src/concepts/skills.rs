@@ -1,6 +1,6 @@
 mod brief_tools;
-mod custom;
 mod canvas_tools;
+mod custom;
 mod file_tools;
 mod graph_tools;
 mod permissions;
@@ -149,8 +149,12 @@ impl Skills {
             "story_grep" => self.with_story_access(ctx, |story| self.exec_story_grep(args, &story)),
             "read_scene" => self.with_story_access(ctx, |story| self.exec_read_scene(args, &story)),
             "list_scenes" => self.with_story_access(ctx, |story| self.exec_list_scenes(&story)),
-            "story_stats" => self.with_story_access(ctx, |story| self.exec_story_stats(&story, ctx.graph)),
-            "read_context_file" => self.exec_read_context_file(args, ctx.manifest, ctx.project_root),
+            "story_stats" => {
+                self.with_story_access(ctx, |story| self.exec_story_stats(&story, ctx.graph))
+            }
+            "read_context_file" => {
+                self.exec_read_context_file(args, ctx.manifest, ctx.project_root)
+            }
             "list_files" => self.exec_list_files(ctx.manifest),
 
             // Graph Tools
@@ -172,15 +176,9 @@ impl Skills {
             }
 
             // Perspective Tools (async, need provider)
-            "interpret_as_character" => {
-                self.exec_interpret_as_character(args, ctx, provider).await
-            }
-            "compare_perspectives" => {
-                self.exec_compare_perspectives(args, ctx, provider).await
-            }
-            "find_blind_spots" => {
-                self.exec_find_blind_spots(args, ctx, provider).await
-            }
+            "interpret_as_character" => self.exec_interpret_as_character(args, ctx, provider).await,
+            "compare_perspectives" => self.exec_compare_perspectives(args, ctx, provider).await,
+            "find_blind_spots" => self.exec_find_blind_spots(args, ctx, provider).await,
             "get_knowledge_at" => self.exec_get_knowledge_at(args, ctx),
 
             // Structural Tools
@@ -241,7 +239,6 @@ impl Skills {
         );
         f(story)
     }
-
 }
 
 impl Default for Skills {
@@ -270,7 +267,7 @@ mod tests {
     use super::*;
     use crate::concepts::file_buffer_manager::FileBufferManager;
     use crate::concepts::manifest::{Manifest, ManifestMeta, StoryFile};
-    use crate::concepts::narrative_graph::{new_id, GraphEdge, GraphNode, Scope, Status};
+    use crate::concepts::narrative_graph::{GraphEdge, GraphNode, Scope, Status, new_id};
     use crate::concepts::scene_map::ParseMode;
     use std::path::PathBuf;
 
@@ -299,7 +296,11 @@ mod tests {
             description: Some("A spy".to_string()),
         });
 
-        let scene_ids: Vec<String> = scene_map.list_scenes().iter().map(|s| s.id.clone()).collect();
+        let scene_ids: Vec<String> = scene_map
+            .list_scenes()
+            .iter()
+            .map(|s| s.id.clone())
+            .collect();
 
         if scene_ids.len() >= 2 {
             graph.add_node(GraphNode::Scene {
@@ -339,8 +340,7 @@ mod tests {
         (text_buffer, scene_map, graph, intent)
     }
 
-    fn make_multi_file_canvas_context(
-    ) -> (
+    fn make_multi_file_canvas_context() -> (
         tempfile::TempDir,
         TextBuffer,
         SceneMap,
@@ -417,7 +417,12 @@ mod tests {
         };
 
         let result = skills
-            .invoke("get_scene_analysis", &serde_json::json!({"scene": "1"}), &mut ctx, None)
+            .invoke(
+                "get_scene_analysis",
+                &serde_json::json!({"scene": "1"}),
+                &mut ctx,
+                None,
+            )
             .await;
         // Should return analysis or an error if scene not in graph by that number
         assert!(result.get("error").is_some() || result.get("scene_id").is_some());
@@ -823,10 +828,12 @@ mod tests {
             )
             .await;
 
-        assert!(result["error"]
-            .as_str()
-            .unwrap()
-            .contains("require a 'file' field"));
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("require a 'file' field")
+        );
     }
 
     #[tokio::test]
@@ -994,7 +1001,11 @@ mod tests {
     async fn test_read_context_file_by_role() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        std::fs::write(root.join("outline.md"), "# Story Outline\n\nAct 1: Setup\nAct 2: Confrontation\nAct 3: Resolution").unwrap();
+        std::fs::write(
+            root.join("outline.md"),
+            "# Story Outline\n\nAct 1: Setup\nAct 2: Confrontation\nAct 3: Resolution",
+        )
+        .unwrap();
 
         let (mut text_buffer, mut scene_map, graph, mut intent) = make_test_context();
         let manifest = crate::concepts::manifest::Manifest {
@@ -1026,7 +1037,12 @@ mod tests {
 
         // Look up by role
         let result = skills
-            .invoke("read_context_file", &serde_json::json!({"file": "outline"}), &mut ctx, None)
+            .invoke(
+                "read_context_file",
+                &serde_json::json!({"file": "outline"}),
+                &mut ctx,
+                None,
+            )
             .await;
         assert_eq!(result["path"], "outline.md");
         assert_eq!(result["role"], "outline");
@@ -1038,7 +1054,11 @@ mod tests {
     async fn test_read_context_file_by_path() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        std::fs::write(root.join("characters.md"), "# Characters\n\nMarcus: A warrior prince").unwrap();
+        std::fs::write(
+            root.join("characters.md"),
+            "# Characters\n\nMarcus: A warrior prince",
+        )
+        .unwrap();
 
         let (mut text_buffer, mut scene_map, graph, mut intent) = make_test_context();
         let manifest = crate::concepts::manifest::Manifest {
@@ -1070,7 +1090,12 @@ mod tests {
 
         // Look up by path
         let result = skills
-            .invoke("read_context_file", &serde_json::json!({"file": "characters.md"}), &mut ctx, None)
+            .invoke(
+                "read_context_file",
+                &serde_json::json!({"file": "characters.md"}),
+                &mut ctx,
+                None,
+            )
             .await;
         assert_eq!(result["path"], "characters.md");
         assert_eq!(result["role"], "characters");
@@ -1108,7 +1133,12 @@ mod tests {
         };
 
         let result = skills
-            .invoke("read_context_file", &serde_json::json!({"file": "nonexistent"}), &mut ctx, None)
+            .invoke(
+                "read_context_file",
+                &serde_json::json!({"file": "nonexistent"}),
+                &mut ctx,
+                None,
+            )
             .await;
         assert!(result["error"].as_str().unwrap().contains("not found"));
         // Should list available files
@@ -1347,10 +1377,7 @@ type = "object"
                 None,
             )
             .await;
-        assert!(result["error"]
-            .as_str()
-            .unwrap()
-            .contains("not permitted"));
+        assert!(result["error"].as_str().unwrap().contains("not permitted"));
     }
 
     #[test]

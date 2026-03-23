@@ -1,16 +1,14 @@
 use futures::future::BoxFuture;
 
-use crate::concepts::context_budget::{
-    extract_relevant_ids, summarize_history, ContextReport,
-};
+use crate::concepts::context_budget::{ContextReport, extract_relevant_ids, summarize_history};
 use crate::concepts::declared_intent::DeclaredIntent;
 use crate::concepts::file_buffer_manager::FileBufferManager;
 use crate::concepts::narrative_graph::NarrativeGraph;
+#[cfg(test)]
+use crate::concepts::provider::LlmResponse;
 use crate::concepts::provider::{
     Message, Provider, ResponseUsage, Role, ToolCall, ToolResult, ToolSchema,
 };
-#[cfg(test)]
-use crate::concepts::provider::LlmResponse;
 use crate::concepts::scene_map::SceneMap;
 use crate::concepts::skills::{SkillSetContext, Skills};
 use crate::concepts::text_buffer::TextBuffer;
@@ -50,7 +48,9 @@ pub struct PreparedChatTurn {
 
 #[derive(Debug, Clone)]
 pub enum SessionEvent {
-    ContextPrepared { report: ContextReport },
+    ContextPrepared {
+        report: ContextReport,
+    },
     Usage {
         usage: ResponseUsage,
         context_estimate: String,
@@ -99,10 +99,7 @@ impl AgentSession {
         (before, self.history.len())
     }
 
-    pub fn prepare_chat_turn(
-        &self,
-        request: ChatTurnRequest<'_>,
-    ) -> PreparedChatTurn {
+    pub fn prepare_chat_turn(&self, request: ChatTurnRequest<'_>) -> PreparedChatTurn {
         let relevant = extract_relevant_ids(request.user_input, request.graph);
         let graph_json = if relevant.is_empty() {
             request.graph.serialize_summary()
@@ -135,9 +132,7 @@ impl AgentSession {
         let divergence_note = if divergence_json.is_empty() {
             String::new()
         } else {
-            format!(
-                "\n\nActive divergences (inferred vs writer-declared):\n{divergence_json}"
-            )
+            format!("\n\nActive divergences (inferred vs writer-declared):\n{divergence_json}")
         };
 
         let context_message = format!(
@@ -253,8 +248,7 @@ impl AgentSession {
                 return Ok(CompletedChatTurn { final_text: text });
             }
 
-            let tool_results =
-                exec_tools(&response.tool_calls, provider, skills, exec_state).await;
+            let tool_results = exec_tools(&response.tool_calls, provider, skills, exec_state).await;
 
             messages.push(Message {
                 role: Role::Assistant,
@@ -296,10 +290,8 @@ impl AgentSession {
             &'a [ToolSchema],
             &'a str,
         ) -> BoxFuture<'a, Result<LlmResponse, LairesError>>,
-        ExecTools: for<'a> FnMut(
-            &'a [ToolCall],
-            &'a mut ExecState,
-        ) -> BoxFuture<'a, Vec<ToolResult>>,
+        ExecTools:
+            for<'a> FnMut(&'a [ToolCall], &'a mut ExecState) -> BoxFuture<'a, Vec<ToolResult>>,
         OnEvent: FnMut(SessionEvent),
     {
         let PreparedChatTurn {
@@ -430,9 +422,9 @@ mod tests {
     }
 
     fn make_story() -> (TextBuffer, SceneMap) {
-        let text = "## Scene 1\n\nMarcus arrives at the embassy.\n\n## Scene 2\n\nElena waits in silence.";
-        let text_buffer =
-            TextBuffer::from_str(text, std::path::PathBuf::from("/tmp/story.md"));
+        let text =
+            "## Scene 1\n\nMarcus arrives at the embassy.\n\n## Scene 2\n\nElena waits in silence.";
+        let text_buffer = TextBuffer::from_str(text, std::path::PathBuf::from("/tmp/story.md"));
         let mut scene_map = SceneMap::new(ParseMode::Prose);
         scene_map.full_reindex(text, "story.md");
         (text_buffer, scene_map)
@@ -525,7 +517,10 @@ mod tests {
         assert!(prepared.messages[0].content.contains("Graph may be stale."));
         assert!(prepared.messages[0].content.contains("Marcus"));
         assert!(!prepared.messages[0].content.contains("Elena"));
-        assert_eq!(prepared.messages.last().unwrap().content, "Tell me about Marcus");
+        assert_eq!(
+            prepared.messages.last().unwrap().content,
+            "Tell me about Marcus"
+        );
         assert_eq!(prepared.system_prompt, "system");
     }
 
@@ -549,7 +544,11 @@ mod tests {
             skill_context: SkillSetContext::Chat,
         });
 
-        assert!(prepared.messages[0].content.contains("2 scene(s) have unanalyzed changes"));
+        assert!(
+            prepared.messages[0]
+                .content
+                .contains("2 scene(s) have unanalyzed changes")
+        );
     }
 
     #[test]
@@ -560,9 +559,11 @@ mod tests {
 
         assert_eq!(before, 10);
         assert_eq!(after, 5);
-        assert!(session.history()[0]
-            .content
-            .starts_with("Earlier conversation summary:"));
+        assert!(
+            session.history()[0]
+                .content
+                .starts_with("Earlier conversation summary:")
+        );
     }
 
     #[test]
@@ -633,8 +634,7 @@ mod tests {
                         Box::pin(async move { response })
                     },
                     |tool_calls, _| {
-                        tool_invocations
-                            .extend(tool_calls.iter().map(|tc| tc.name.clone()));
+                        tool_invocations.extend(tool_calls.iter().map(|tc| tc.name.clone()));
                         let results = tool_calls
                             .iter()
                             .map(|tc| ToolResult {
