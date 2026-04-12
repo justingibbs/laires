@@ -11,7 +11,11 @@ use cli::Cli;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Load .env from current dir (or parents), silently ignore if missing
+    // Load global .env first (~/.config/laires/.env), then project-local .env.
+    // Project-local values override global ones.
+    if let Some(global_env) = config::global_env_path() {
+        dotenvy::from_path(&global_env).ok();
+    }
     dotenvy::dotenv().ok();
 
     tracing_subscriber::fmt()

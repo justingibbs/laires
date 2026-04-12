@@ -175,51 +175,40 @@ pub fn render(
 
                     ui.add_space(8.0);
 
-                    // Scan / action button
-                    if state.char_count == 0 {
+                    // Scan button — always available so the user controls
+                    // when LLM analysis runs (like hitting Save in Word).
+                    {
+                        let (label, fill, text_color) = if state.review_pending {
+                            let pending_label = snapshot
+                                .as_ref()
+                                .map(|snap| {
+                                    format!(
+                                        "Scan ({} stale)",
+                                        snap.pending_scene_count,
+                                    )
+                                })
+                                .unwrap_or_else(|| "Scan".to_string());
+                            (pending_label, Color32::from_rgb(180, 83, 9), Color32::WHITE)
+                        } else if state.char_count == 0 {
+                            ("Scan Story".to_string(), theme.accent, Color32::WHITE)
+                        } else {
+                            ("Scan".to_string(), theme.accent, Color32::WHITE)
+                        };
                         let scan_btn = egui::Button::new(
-                            RichText::new("Scan Story").color(Color32::WHITE).size(12.0),
+                            RichText::new(label).color(text_color).size(12.0),
                         )
-                        .fill(theme.accent)
+                        .fill(fill)
                         .corner_radius(CornerRadius::same(8));
-                        if ui.add(scan_btn).clicked() {
+                        let response = ui.add(scan_btn);
+                        if response.clicked() {
                             ctx.memory_mut(|mem| {
                                 mem.data.insert_temp(egui::Id::new("scan_requested"), true);
                             });
                         }
-                    }
-
-                    if state.review_pending {
-                        ui.add_space(8.0);
-                        let pending_label = snapshot
-                            .as_ref()
-                            .map(|snap| {
-                                format!(
-                                    "{} stale {}",
-                                    snap.pending_scene_count,
-                                    if snap.pending_scene_count == 1 {
-                                        "scene"
-                                    } else {
-                                        "scenes"
-                                    }
-                                )
-                            })
-                            .unwrap_or_else(|| "Review pending".to_string());
-                        let review_btn = egui::Button::new(
-                            RichText::new(pending_label)
-                                .color(Color32::from_rgb(180, 83, 9))
-                                .size(10.0)
-                                .strong(),
-                        )
-                        .fill(Color32::from_rgba_premultiplied(245, 158, 11, 28))
-                        .stroke(Stroke::new(
-                            1.0,
-                            Color32::from_rgba_premultiplied(245, 158, 11, 80),
-                        ))
-                        .corner_radius(CornerRadius::same(4));
-                        let response = ui.add(review_btn);
-                        if let Some(text) = &state.review_status_text {
-                            response.on_hover_text(text);
+                        if state.review_pending {
+                            if let Some(text) = &state.review_status_text {
+                                response.on_hover_text(text);
+                            }
                         }
                     }
 

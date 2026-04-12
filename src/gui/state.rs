@@ -49,7 +49,7 @@ pub enum GuiRequest {
     Chat(String),
     Scan,
     UpdateProvider(ProjectConfig),
-    TestConnection,
+    TestConnection(ProjectConfig),
     NewSession,
     CompactContext,
     SwitchMode(SessionMode),
@@ -195,6 +195,8 @@ pub struct GuiState {
     pub canvas_edit_file: Option<String>,
     /// Whether the canvas edit text has been modified since last sync.
     pub canvas_dirty: bool,
+    /// Current canvas display mode (Markdown = raw text, Preview = rendered).
+    pub canvas_view_mode: CanvasViewMode,
 
     // Analysis sidebar — entity highlight toggles
     pub highlight_characters: bool,
@@ -229,6 +231,18 @@ pub struct GuiState {
     // Session management
     pub new_session_requested: bool,
     pub compact_context_requested: bool,
+
+    // Markdown rendering cache for chat messages
+    pub commonmark_cache: egui_commonmark::CommonMarkCache,
+}
+
+/// How the canvas displays content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanvasViewMode {
+    /// Raw text (editable in Workshop, read-only in Consultant).
+    Markdown,
+    /// Rendered FountainMD preview (always read-only).
+    Preview,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -298,6 +312,7 @@ impl Default for GuiState {
             canvas_edit_text: String::new(),
             canvas_edit_file: None,
             canvas_dirty: false,
+            canvas_view_mode: CanvasViewMode::Markdown,
             highlight_characters: true,
             highlight_locations: true,
             highlight_objects: false,
@@ -316,6 +331,7 @@ impl Default for GuiState {
             context_window_max: 128_000,
             new_session_requested: false,
             compact_context_requested: false,
+            commonmark_cache: egui_commonmark::CommonMarkCache::default(),
         }
     }
 }

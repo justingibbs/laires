@@ -180,6 +180,35 @@ pub fn ensure_gitignore_has_dotenv(project_root: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Return the global Laires config directory (`~/.config/laires/` on macOS/Linux).
+/// Creates the directory if it doesn't exist.
+pub fn global_config_dir() -> Option<PathBuf> {
+    let dir = dirs::config_dir()?.join("laires");
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir).ok()?;
+    }
+    Some(dir)
+}
+
+/// Return the path to the global `.env` file (`~/.config/laires/.env`).
+pub fn global_env_path() -> Option<PathBuf> {
+    Some(global_config_dir()?.join(".env"))
+}
+
+/// Load `.env` files for a project: global first, then project-local (overrides).
+/// Call this when opening a project so API keys are available in the process environment.
+pub fn load_env_for_project(project_root: &Path) {
+    // Global env first (lower priority)
+    if let Some(global_env) = global_env_path() {
+        dotenvy::from_path_override(&global_env).ok();
+    }
+    // Project-local .env overrides global
+    let project_env = project_root.join(".env");
+    if project_env.exists() {
+        dotenvy::from_path_override(&project_env).ok();
+    }
+}
+
 /// Resolve the project root by walking up from `start` looking for .laires/
 pub fn find_project_root(start: &Path) -> Option<PathBuf> {
     let mut current = start.to_path_buf();

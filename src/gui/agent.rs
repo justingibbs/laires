@@ -14,14 +14,12 @@ use crate::concepts::skills::{SkillContext, SkillSetContext, Skills};
 use crate::config::LAIRES_DIR;
 use crate::gui::ProjectData;
 use crate::gui::state::{
-    AgentEvent, GuiRequest, SessionMode, StoryChangeReason, StoryChangeReview, StoryChangeScope,
+    AgentEvent, GuiRequest, SessionMode, StoryChangeReason, StoryChangeScope,
 };
 use crate::runtime::agent_session::{
     AgentSession, ChatTurnError, ChatTurnRequest, SessionEvent, truncate_json,
 };
 use crate::runtime::scene_cache::SceneCache;
-use crate::runtime::story_access::StoryAccess;
-use crate::runtime::story_eval::StoryEvalSnapshot;
 
 const SYSTEM_PROMPT_BASE: &str = r#"You are Laires, an intelligent narrative analysis agent for fiction writers. You have deep understanding of story structure, character arcs, objectives, conflicts, and pacing.
 
@@ -56,10 +54,11 @@ You are in WORKSHOP mode. You can directly edit .md and .fountain files using ca
 
 When the writer asks you to make changes:
 - Explain what you plan to change before making edits
-- Use write_to_canvas, replace_in_canvas, or insert_scene to modify files
+- Use write_to_canvas, replace_in_canvas, or insert_scene to modify existing files
+- Use create_file to create new files (e.g. character sheets, new chapters, notes)
 - After significant edits, suggest running scan_story to update the narrative graph
 
-You can search the story, read scenes, query the graph, analyze character arcs, run perspective analysis, detect blind spots, lint for consistency issues, check pacing, write/replace text in the canvas, and scan/analyze the manuscript."#;
+You can search the story, read scenes, query the graph, analyze character arcs, run perspective analysis, detect blind spots, lint for consistency issues, check pacing, write/replace text in the canvas, create new files, and scan/analyze the manuscript."#;
 
 pub(super) fn system_prompt_for_mode(mode: SessionMode) -> String {
     let suffix = match mode {
@@ -138,16 +137,6 @@ fn sync_pending_review_scope_from_scene_maps(d: &mut ProjectData, reason: StoryC
     record_pending_review_scope(d, reason, changed_files, changed_scene_ids);
 }
 
-fn capture_story_eval_snapshot(d: &ProjectData) -> StoryEvalSnapshot {
-    let story = StoryAccess::new(&d.text_buffer, &d.scene_map, d.file_buffer_manager.as_ref());
-    let stale_scene_count = d
-        .pending_change_scope
-        .as_ref()
-        .map(|scope| scope.changed_scene_ids.len())
-        .unwrap_or(0);
-    StoryEvalSnapshot::capture(&d.graph, &d.intent, &story, stale_scene_count)
-}
-
 fn changed_range(
     old_text: &str,
     new_text: &str,
@@ -178,80 +167,6 @@ fn changed_range(
     Some(crate::concepts::text_buffer::ByteRange::new(
         prefix, new_suffix,
     ))
-}
-
-#[derive(Clone)]
-struct SceneAnalysisJob {
-    scene_id: String,
-    file_path: String,
-    title: Option<String>,
-    scene_text: String,
-    content_hash: String,
-}
-
-async fn run_incremental_review(
-    d: &mut ProjectData,
-    provider: &mut Provider,
-    jobs: Vec<SceneAnalysisJob>,
-) -> anyhow::Result<usize> {
-    if jobs.is_empty() {
-        return Ok(0);
-    }
-
-    let mut analysis = Analysis::new();
-    let mut scenes_analyzed = 0usize;
-
-    for job in jobs {
-        analysis.enqueue(AnalysisTask {
-            kind: AnalysisKind::SceneAnalysis {
-                scene_id: job.scene_id.clone(),
-            },
-            priority: Priority::High,
-            created: chrono::Utc::now(),
-        });
-
-        let graph_context = d.graph.serialize_compact();
-        match analysis
-            .process_next(provider, &job.scene_text, &graph_context, &job.content_hash)
-            .await
-        {
-            Ok(Some(result)) => {
-                apply_analysis_to_graph(&mut d.graph, &result, &job.scene_id, &job.file_path);
-                if let Some(ref mut fbm) = d.file_buffer_manager {
-                    if let Some(entry) = fbm.get_entry_mut(&job.file_path) {
-                        entry.scene_map.mark_analyzed(&job.scene_id);
-                    }
-                } else {
-                    d.scene_map.mark_analyzed(&job.scene_id);
-                }
-                scenes_analyzed += 1;
-            }
-            Ok(None) => {}
-            Err(e) => {
-                return Err(anyhow::anyhow!(
-                    "Analysis error for scene \"{}\": {e}",
-                    job.title.as_deref().unwrap_or(&job.scene_id)
-                ));
-            }
-        }
-    }
-
-    let graph_path = d.project_root.join(LAIRES_DIR).join("graph.json");
-    d.graph.save(&graph_path)?;
-    if let Some(ref fbm) = d.file_buffer_manager {
-        SceneCache::from_file_buffer_manager(fbm).save_to_project(&d.project_root)?;
-    } else {
-        let rel_path = project_relative_path(&d.project_root, d.text_buffer.file_path());
-        SceneCache::from_single_file(rel_path, &d.scene_map).save_to_project(&d.project_root)?;
-    }
-
-    let graph_hash = blake3::hash(d.graph.serialize_compact().as_bytes())
-        .to_hex()
-        .to_string();
-    d.perspectives.invalidate_by_graph_hash(&graph_hash);
-    sync_pending_review_scope_from_scene_maps(d, StoryChangeReason::CanvasEdit);
-
-    Ok(scenes_analyzed)
 }
 
 pub async fn agent_loop(
@@ -333,18 +248,29 @@ pub async fn agent_loop(
                     }
                 }
             }
-            GuiRequest::TestConnection => {
+            GuiRequest::TestConnection(test_config) => {
                 let _ = events.send(AgentEvent::Thinking);
-                let success = provider.test_connection().await;
-                let message = if success {
-                    format!("Connected to {} successfully", provider.model_name())
-                } else {
-                    match provider.connection_status() {
-                        crate::concepts::provider::ConnectionStatus::Error(e) => {
-                            format!("Connection failed: {e}")
+                // Build a temporary provider from the test config to validate
+                // the new settings, not the current agent provider.
+                let result = crate::concepts::provider::Provider::from_project_config(
+                    &test_config,
+                );
+                let (success, message) = match result {
+                    Ok(mut test_provider) => {
+                        let ok = test_provider.test_connection().await;
+                        if ok {
+                            (true, format!("Connected to {} successfully", test_provider.model_name()))
+                        } else {
+                            let msg = match test_provider.connection_status() {
+                                crate::concepts::provider::ConnectionStatus::Error(e) => {
+                                    format!("Connection failed: {e}")
+                                }
+                                _ => "Connection failed".to_string(),
+                            };
+                            (false, msg)
                         }
-                        _ => "Connection failed".to_string(),
                     }
+                    Err(e) => (false, format!("Invalid provider config: {e}")),
                 };
                 let _ = events.send(AgentEvent::ConnectionTestResult(success, message));
                 let _ = events.send(AgentEvent::Idle);
@@ -394,7 +320,6 @@ pub async fn agent_loop(
                 let mut guard = domain.lock().await;
                 let d = &mut *guard;
                 let mut did_change = false;
-                let mut review_jobs: Vec<SceneAnalysisJob> = Vec::new();
 
                 let save_result = if let Some(ref file_path) = file {
                     // Multi-file: update in FileBufferManager
@@ -441,25 +366,6 @@ pub async fn agent_loop(
                                     for removed_scene_id in removed_scene_ids {
                                         d.graph.clear_scene_analysis(&removed_scene_id, true);
                                     }
-                                    review_jobs = entry
-                                        .scene_map
-                                        .list_scenes()
-                                        .iter()
-                                        .filter(|scene| {
-                                            entry.scene_map.get_pending().contains(&scene.id)
-                                        })
-                                        .filter_map(|scene| {
-                                            entry.text_buffer.read(scene.byte_range()).ok().map(
-                                                |scene_text| SceneAnalysisJob {
-                                                    scene_id: scene.id.clone(),
-                                                    file_path: file_path.clone(),
-                                                    title: scene.title.clone(),
-                                                    scene_text,
-                                                    content_hash: scene.content_hash.clone(),
-                                                },
-                                            )
-                                        })
-                                        .collect();
                                     entry.text_buffer.save().map_err(|e| format!("{e}"))
                                 }
                             }
@@ -507,23 +413,6 @@ pub async fn agent_loop(
                             {
                                 d.graph.clear_scene_analysis(&removed_scene_id, true);
                             }
-                            review_jobs =
-                                d.scene_map
-                                    .list_scenes()
-                                    .iter()
-                                    .filter(|scene| d.scene_map.get_pending().contains(&scene.id))
-                                    .filter_map(|scene| {
-                                        d.text_buffer.read(scene.byte_range()).ok().map(
-                                            |scene_text| SceneAnalysisJob {
-                                                scene_id: scene.id.clone(),
-                                                file_path: rel_path.clone(),
-                                                title: scene.title.clone(),
-                                                scene_text,
-                                                content_hash: scene.content_hash.clone(),
-                                            },
-                                        )
-                                    })
-                                    .collect();
                             d.text_buffer.save().map_err(|e| format!("{e}"))
                         }
                     }
@@ -533,31 +422,9 @@ pub async fn agent_loop(
                     Ok(()) if did_change => {
                         d.latest_change_review = None;
                         sync_pending_review_scope_from_scene_maps(d, StoryChangeReason::CanvasEdit);
-                        let review_scope = d.pending_change_scope.clone();
-                        let before_eval = capture_story_eval_snapshot(d);
+                        // Scene reindexing already happened above (free, local).
+                        // LLM analysis is deferred until the user clicks "Scan".
                         let _ = events.send(AgentEvent::StateChanged);
-                        if !review_jobs.is_empty() {
-                            let _ = events.send(AgentEvent::Thinking);
-                            match run_incremental_review(d, &mut provider, review_jobs).await {
-                                Ok(_) => {
-                                    if let Some(scope) = review_scope {
-                                        d.latest_change_review = Some(StoryChangeReview {
-                                            scope,
-                                            before: before_eval,
-                                            after: capture_story_eval_snapshot(d),
-                                        });
-                                    }
-                                    let _ = events.send(AgentEvent::StateChanged);
-                                }
-                                Err(e) => {
-                                    let _ = events.send(AgentEvent::Error(format!(
-                                        "Incremental review error: {e}"
-                                    )));
-                                    let _ = events.send(AgentEvent::StateChanged);
-                                }
-                            }
-                            let _ = events.send(AgentEvent::Idle);
-                        }
                     }
                     Ok(()) => {}
                     Err(e) => {
@@ -714,7 +581,7 @@ async fn run_gui_scan(
         let raw = response.content.unwrap_or_default();
         let result = parse_classification_response(&raw)?;
         let manifest =
-            build_manifest_from_classification(result, &discovered, &d.config.classification.model);
+            build_manifest_from_classification(result, &discovered, class_model);
         manifest.save(&project_root)?;
         d.manifest = Some(manifest.clone());
         manifest
@@ -916,6 +783,170 @@ async fn run_scan_single_buffer(
     Ok(summary)
 }
 
+fn run_create_file(d: &mut ProjectData, args: &serde_json::Value) -> serde_json::Value {
+    let file = match args["file"].as_str() {
+        Some(f) => f,
+        None => return serde_json::json!({ "error": "Missing required field: file" }),
+    };
+    let content = args["content"].as_str().unwrap_or("");
+
+    // Validate extension
+    let lower = file.to_lowercase();
+    if !lower.ends_with(".md") && !lower.ends_with(".fountain") && !lower.ends_with(".txt") {
+        return serde_json::json!({
+            "error": format!(
+                "Unsupported file extension for '{}'. Use .md, .fountain, or .txt",
+                file
+            )
+        });
+    }
+
+    // Determine role
+    let role_str = args["role"].as_str().unwrap_or("story");
+    let is_story = role_str == "story";
+
+    // Determine format for story files
+    let format = if is_story {
+        args["format"].as_str().map(String::from).unwrap_or_else(|| {
+            if lower.ends_with(".fountain") {
+                "fountain".to_string()
+            } else {
+                "prose".to_string()
+            }
+        })
+    } else {
+        "prose".to_string()
+    };
+
+    let abs_path = d.project_root.join(file);
+
+    // Don't overwrite existing files
+    if abs_path.exists() {
+        return serde_json::json!({
+            "error": format!("File '{}' already exists", file)
+        });
+    }
+
+    // Create parent directories if needed
+    if let Some(parent) = abs_path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return serde_json::json!({
+                "error": format!("Failed to create directory: {}", e)
+            });
+        }
+    }
+
+    // Write the file
+    if let Err(e) = std::fs::write(&abs_path, content) {
+        return serde_json::json!({
+            "error": format!("Failed to write file: {}", e)
+        });
+    }
+
+    let content_hash = blake3::hash(content.as_bytes()).to_hex().to_string();
+
+    // Update manifest
+    let manifest = d.manifest.get_or_insert_with(|| {
+        crate::concepts::manifest::Manifest {
+            meta: crate::concepts::manifest::ManifestMeta {
+                last_scan: chrono::Utc::now().to_rfc3339(),
+                classification_model: "user-created".to_string(),
+            },
+            story_files: Vec::new(),
+            context_files: Vec::new(),
+            excluded: Vec::new(),
+        }
+    });
+
+    if is_story {
+        let next_order = manifest
+            .story_files
+            .iter()
+            .map(|sf| sf.order)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        manifest.story_files.push(crate::concepts::manifest::StoryFile {
+            path: file.to_string(),
+            format: format.clone(),
+            order: next_order,
+            content_hash,
+            editable: crate::concepts::manifest::StoryFile::infer_editable(file),
+        });
+
+        // Add to FileBufferManager
+        let text_buffer = crate::concepts::text_buffer::TextBuffer::from_file(abs_path.clone())
+            .unwrap_or_else(|_| {
+                crate::concepts::text_buffer::TextBuffer::new(abs_path)
+            });
+        let full_text = text_buffer.read_all();
+        let parse_mode = if format == "fountain" {
+            crate::concepts::scene_map::ParseMode::Fountain
+        } else {
+            crate::concepts::scene_map::ParseMode::Prose
+        };
+        let mut scene_map = crate::concepts::scene_map::SceneMap::new(parse_mode);
+        if !full_text.trim().is_empty() {
+            scene_map.full_reindex(&full_text, file);
+        }
+
+        let entry = crate::concepts::file_buffer_manager::FileEntry {
+            text_buffer,
+            scene_map,
+            file_path: file.to_string(),
+            format: format.clone(),
+            order: next_order,
+        };
+
+        let fbm = d.file_buffer_manager.get_or_insert_with(|| {
+            FileBufferManager::from_manifest(manifest, &d.project_root)
+                .unwrap_or_else(|_| {
+                    // Fallback: empty FBM — the entry we're about to add will populate it.
+                    FileBufferManager::from_manifest(
+                        &crate::concepts::manifest::Manifest {
+                            meta: manifest.meta.clone(),
+                            story_files: Vec::new(),
+                            context_files: Vec::new(),
+                            excluded: Vec::new(),
+                        },
+                        &d.project_root,
+                    )
+                    .unwrap()
+                })
+        });
+        fbm.add_entry(entry);
+    } else {
+        let role = match role_str {
+            "outline" => crate::concepts::manifest::FileRole::Outline,
+            "characters" => crate::concepts::manifest::FileRole::Characters,
+            "notes" => crate::concepts::manifest::FileRole::Notes,
+            _ => crate::concepts::manifest::FileRole::Notes,
+        };
+        manifest
+            .context_files
+            .push(crate::concepts::manifest::ContextFile {
+                path: file.to_string(),
+                role,
+                content_hash,
+            });
+    }
+
+    // Save manifest to disk
+    if let Err(e) = manifest.save(&d.project_root) {
+        return serde_json::json!({
+            "error": format!("File created but failed to save manifest: {}", e)
+        });
+    }
+
+    serde_json::json!({
+        "status": "created",
+        "file": file,
+        "role": role_str,
+        "format": format,
+        "bytes_written": content.len(),
+    })
+}
+
 async fn execute_gui_tool_calls(
     runtime: &mut GuiToolRuntime,
     tool_calls: &[ToolCall],
@@ -938,6 +969,8 @@ async fn execute_gui_tool_calls(
                 Ok(summary) => serde_json::json!({ "result": summary }),
                 Err(e) => serde_json::json!({ "error": e.to_string() }),
             }
+        } else if tc.name == "create_file" {
+            run_create_file(d, &tc.arguments)
         } else {
             let mut ctx = SkillContext {
                 text_buffer: &mut d.text_buffer,

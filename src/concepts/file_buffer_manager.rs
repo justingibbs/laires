@@ -162,6 +162,12 @@ impl FileBufferManager {
         self.entries.len()
     }
 
+    /// Add a new file entry (for files created at runtime).
+    pub fn add_entry(&mut self, entry: FileEntry) {
+        self.entries.push(entry);
+        self.entries.sort_by_key(|e| e.order);
+    }
+
     /// Save any dirty text buffers.
     pub fn save_dirty(&mut self) -> anyhow::Result<()> {
         for entry in &mut self.entries {

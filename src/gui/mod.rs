@@ -67,11 +67,14 @@ pub(crate) struct ProjectData {
     pub latest_change_review: Option<StoryChangeReview>,
 }
 
-/// State for the "New Project" dialog.
+/// State for the "New Project" / "Initialize" dialog.
 struct NewProjectDialog {
     title: String,
-    fountain: bool,
     target_dir: PathBuf,
+    /// Contextual message shown at the top of the dialog (varies by folder state).
+    message: String,
+    /// Label for the primary action button ("Create" or "Initialize").
+    button_label: String,
 }
 
 /// Connection test status for the settings dialog.
@@ -80,6 +83,15 @@ enum TestConnectionStatus {
     Testing,
     Success(String),
     Failure(String),
+}
+
+/// Cached settings for a single provider (used to restore when switching back).
+#[derive(Clone)]
+struct ProviderSettings {
+    model: String,
+    api_key_env: String,
+    api_key: String,
+    base_url: String,
 }
 
 /// State for the Settings dialog.
@@ -118,6 +130,8 @@ struct GuiApp {
     load_error: Option<String>,
     new_project_dialog: Option<NewProjectDialog>,
     settings_dialog: Option<SettingsDialog>,
+    /// Remembers settings per provider so switching back restores them across dialog sessions.
+    provider_history: std::collections::HashMap<String, ProviderSettings>,
 }
 
 /// A group of scenes belonging to a single story file.
@@ -152,6 +166,8 @@ pub(crate) struct ProjectSnapshot {
     /// Brief revision count and rendered markdown (for Brief panel).
     brief_revision_count: usize,
     brief_markdown: String,
+    /// Whether the currently selected file supports Preview mode (.md / .fountain).
+    preview_available: bool,
 }
 
 impl GuiApp {
@@ -195,6 +211,7 @@ impl GuiApp {
             load_error: None,
             new_project_dialog: None,
             settings_dialog: None,
+            provider_history: std::collections::HashMap::new(),
         }
         .with_review_state(review_pending, review_status_text)
     }
@@ -411,36 +428,45 @@ impl GuiApp {
     // Project loading / switching
     // -----------------------------------------------------------------------
 
-    /// Open a native folder picker dialog and set pending_project_path.
+    /// Open a native folder picker dialog. Handles three cases:
+    /// 1. Folder has `.laires/` — load directly as existing project.
+    /// 2. Folder has files but no `.laires/` — offer to initialize.
+    /// 3. Empty folder — offer to create a new Laires project.
     fn trigger_open_project(&mut self) {
         if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+            let folder_name = folder
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Untitled".to_string());
+
             if folder.join(LAIRES_DIR).is_dir() {
+                // Already a Laires project — load it
                 self.pending_project_path = Some(folder);
             } else {
-                // Not a Laires project — offer to init via "New Project" dialog
-                self.new_project_dialog = Some(NewProjectDialog {
-                    title: folder
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "Untitled".to_string()),
-                    fountain: false,
-                    target_dir: folder,
-                });
-            }
-        }
-    }
+                let is_empty = std::fs::read_dir(&folder)
+                    .map(|mut entries| entries.next().is_none())
+                    .unwrap_or(true);
 
-    /// Open a native folder picker for New Project.
-    fn trigger_new_project(&mut self) {
-        if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-            self.new_project_dialog = Some(NewProjectDialog {
-                title: folder
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "Untitled".to_string()),
-                fountain: false,
-                target_dir: folder,
-            });
+                if is_empty {
+                    self.new_project_dialog = Some(NewProjectDialog {
+                        title: folder_name,
+                        target_dir: folder,
+                        message: "Create a new Laires project in this folder. \
+                                  Laires will set up your project structure and a starter story file."
+                            .to_string(),
+                        button_label: "Create".to_string(),
+                    });
+                } else {
+                    self.new_project_dialog = Some(NewProjectDialog {
+                        title: folder_name,
+                        target_dir: folder,
+                        message: "Would you like to initialize this folder as a Laires project? \
+                                  Laires will discover and analyze your existing files."
+                            .to_string(),
+                        button_label: "Initialize".to_string(),
+                    });
+                }
+            }
         }
     }
 
@@ -459,6 +485,18 @@ impl GuiApp {
         }
     }
 
+    /// Sensible default model for each provider.
+    fn default_model_for_provider(provider: &str) -> &'static str {
+        match provider {
+            "anthropic" => "claude-sonnet-4-6",
+            "openai" => "gpt-4o",
+            "gemini" => "gemini-2.5-flash",
+            "local" => "llama3.2",
+            "pydantic-gateway" => "gpt-4o",
+            _ => "",
+        }
+    }
+
     /// Populate the settings dialog from the current config.
     fn open_settings_dialog(&mut self) {
         let Some(domain) = &self.domain else { return };
@@ -473,8 +511,21 @@ impl GuiApp {
             String::new()
         };
 
+        // Always update the current provider's settings in history so switching
+        // away and back restores them (including the actual model name).
+        let current_provider = proj.config.llm.provider.clone();
+        self.provider_history.insert(
+            current_provider.clone(),
+            ProviderSettings {
+                model: proj.config.llm.model.clone(),
+                api_key_env: api_key_env.clone(),
+                api_key: api_key.clone(),
+                base_url: proj.config.llm.base_url.clone().unwrap_or_default(),
+            },
+        );
+
         self.settings_dialog = Some(SettingsDialog {
-            provider: proj.config.llm.provider.clone(),
+            provider: current_provider,
             model: proj.config.llm.model.clone(),
             api_key,
             api_key_env,
@@ -494,6 +545,8 @@ impl GuiApp {
         let mut should_save = false;
         let mut should_test = false;
         let mut should_cancel = false;
+        // Track provider change so we can update history after the closure
+        let mut provider_changed_from: Option<String> = None;
 
         egui::Window::new("Settings")
             .collapsible(false)
@@ -516,16 +569,8 @@ impl GuiApp {
                                 ui.selectable_value(&mut dialog.provider, p.to_string(), *p);
                             }
                         });
-                    // Auto-fill defaults when provider changes
                     if dialog.provider != prev_provider {
-                        let (env, url) = Self::provider_defaults(&dialog.provider);
-                        dialog.api_key_env = env.to_string();
-                        dialog.base_url = url.to_string();
-                        dialog.api_key = if !env.is_empty() {
-                            std::env::var(env).unwrap_or_default()
-                        } else {
-                            String::new()
-                        };
+                        provider_changed_from = Some(prev_provider);
                         dialog.test_status = None;
                         dialog.error_message = None;
                     }
@@ -598,6 +643,42 @@ impl GuiApp {
                 });
             });
 
+        // Handle provider switch: save old settings to history, restore or default new ones.
+        // Done here (outside the egui closure) so we can access self.provider_history.
+        if let Some(old_provider) = provider_changed_from {
+            if let Some(dialog) = &mut self.settings_dialog {
+                // Save the old provider's settings
+                self.provider_history.insert(
+                    old_provider,
+                    ProviderSettings {
+                        model: dialog.model.clone(),
+                        api_key_env: dialog.api_key_env.clone(),
+                        api_key: dialog.api_key.clone(),
+                        base_url: dialog.base_url.clone(),
+                    },
+                );
+
+                // Restore saved settings or fill defaults
+                if let Some(saved) = self.provider_history.get(&dialog.provider) {
+                    dialog.model = saved.model.clone();
+                    dialog.api_key_env = saved.api_key_env.clone();
+                    dialog.api_key = saved.api_key.clone();
+                    dialog.base_url = saved.base_url.clone();
+                } else {
+                    let (env, url) = Self::provider_defaults(&dialog.provider);
+                    dialog.api_key_env = env.to_string();
+                    dialog.base_url = url.to_string();
+                    dialog.api_key = if !env.is_empty() {
+                        std::env::var(env).unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    dialog.model =
+                        Self::default_model_for_provider(&dialog.provider).to_string();
+                }
+            }
+        }
+
         if should_save {
             self.save_settings();
             return;
@@ -616,8 +697,26 @@ impl GuiApp {
                     }
                 }
             }
-            if let Some(tx) = &self.gui_tx {
-                let _ = tx.send(GuiRequest::TestConnection);
+            // Build a config from the dialog so the agent tests the NEW settings
+            if let (Some(d), Some(domain)) = (&self.settings_dialog, &self.domain) {
+                if let Ok(proj) = domain.try_lock() {
+                    let mut test_cfg = proj.config.clone();
+                    test_cfg.llm.provider = d.provider.clone();
+                    test_cfg.llm.model = d.model.clone();
+                    test_cfg.llm.api_key_env = if d.api_key_env.is_empty() {
+                        None
+                    } else {
+                        Some(d.api_key_env.clone())
+                    };
+                    test_cfg.llm.base_url = if d.base_url.is_empty() {
+                        None
+                    } else {
+                        Some(d.base_url.clone())
+                    };
+                    if let Some(tx) = &self.gui_tx {
+                        let _ = tx.send(GuiRequest::TestConnection(test_cfg));
+                    }
+                }
             }
             return;
         }
@@ -785,23 +884,27 @@ impl GuiApp {
         // Render new-project dialog window if open
         let mut should_init = false;
         let mut init_title = String::new();
-        let mut init_fountain = false;
         let mut init_dir = PathBuf::new();
         let mut close_dialog = false;
 
         if let Some(dialog) = &mut self.new_project_dialog {
             let mut open = true;
-            egui::Window::new("New Project")
+            egui::Window::new("Open Project")
                 .collapsible(false)
                 .resizable(false)
                 .open(&mut open)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
+                    ui.label(
+                        RichText::new(&dialog.message)
+                            .size(13.0)
+                            .color(self.theme.text_secondary),
+                    );
+                    ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         ui.label("Title:");
                         ui.text_edit_singleline(&mut dialog.title);
                     });
-                    ui.checkbox(&mut dialog.fountain, "Fountain/screenplay format");
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new(format!("Location: {}", dialog.target_dir.display()))
@@ -810,10 +913,11 @@ impl GuiApp {
                     );
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Create").clicked() && !dialog.title.trim().is_empty() {
+                        if ui.button(&dialog.button_label).clicked()
+                            && !dialog.title.trim().is_empty()
+                        {
                             should_init = true;
                             init_title = dialog.title.trim().to_string();
-                            init_fountain = dialog.fountain;
                             init_dir = dialog.target_dir.clone();
                         }
                         if ui.button("Cancel").clicked() {
@@ -832,7 +936,7 @@ impl GuiApp {
 
         if should_init {
             self.new_project_dialog = None;
-            match crate::cli::init::init_at(&init_dir, &init_title, init_fountain) {
+            match crate::cli::init::init_at(&init_dir, &init_title, false) {
                 Ok(()) => {
                     self.pending_project_path = Some(init_dir);
                 }
@@ -860,9 +964,6 @@ impl GuiApp {
                     WelcomeAction::None => {}
                     WelcomeAction::OpenProject => {
                         self.trigger_open_project();
-                    }
-                    WelcomeAction::NewProject => {
-                        self.trigger_new_project();
                     }
                     WelcomeAction::OpenRecent(path) => {
                         self.pending_project_path = Some(path);
@@ -1481,6 +1582,7 @@ fn build_snapshot(proj: &ProjectData) -> ProjectSnapshot {
             .filter(|b| !b.is_empty())
             .map(|b| b.to_markdown())
             .unwrap_or_default(),
+        preview_available: true, // determined per-file in canvas render
     }
 }
 
@@ -1527,6 +1629,8 @@ fn build_review_status_text(snapshot: Option<&ProjectSnapshot>) -> Option<String
 fn load_project_from_path(start: &Path) -> anyhow::Result<ProjectLoadResult> {
     let project_root = config::find_project_root(start)
         .ok_or_else(|| anyhow::anyhow!("No .laires/ directory found at {}", start.display()))?;
+    // Load .env files so API keys are available in the process environment.
+    config::load_env_for_project(&project_root);
     load_project(&project_root)
 }
 

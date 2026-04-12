@@ -81,7 +81,6 @@ impl RecentProjects {
 pub enum WelcomeAction {
     None,
     OpenProject,
-    NewProject,
     OpenRecent(PathBuf),
 }
 
@@ -113,29 +112,18 @@ pub fn render_welcome(
 
         ui.add_space(40.0);
 
-        // Buttons
+        // Button
         ui.horizontal(|ui| {
-            // Center the buttons
             let button_width = 160.0;
-            let spacing = 16.0;
-            let total = button_width * 2.0 + spacing;
             let avail = ui.available_width();
-            if avail > total {
-                ui.add_space((avail - total) / 2.0);
+            if avail > button_width {
+                ui.add_space((avail - button_width) / 2.0);
             }
 
             let open_btn = egui::Button::new(RichText::new("Open Project").size(15.0))
                 .min_size(egui::vec2(button_width, 40.0));
             if ui.add(open_btn).clicked() {
                 action = WelcomeAction::OpenProject;
-            }
-
-            ui.add_space(spacing);
-
-            let new_btn = egui::Button::new(RichText::new("New Project").size(15.0))
-                .min_size(egui::vec2(button_width, 40.0));
-            if ui.add(new_btn).clicked() {
-                action = WelcomeAction::NewProject;
             }
         });
 

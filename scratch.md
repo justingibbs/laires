@@ -24,7 +24,20 @@ laires scan
 - dual-mode
 - gui-refresh (deleted)
 - phase-5
-- codex-loop (to be implemented)
+- codex-loop
+- initial-release
+
+---
+
+The plan is in context/app-golden-path-remediation-plan.md.
+
+It’s structured around the actual blockers:
+
+Phase 1 fixes the broken golden path for newly created opportunities.
+Phase 2 adds usable candidate review.
+Phase 3 adds recruiter email/invite flow.
+Phase 4 replaces placeholder dashboards.
+Phase 5 adds test coverage.
 
 
 

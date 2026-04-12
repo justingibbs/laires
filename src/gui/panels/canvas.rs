@@ -1,8 +1,9 @@
 use eframe::egui::{self, Color32, CornerRadius, FontFamily, FontId, RichText, Vec2};
 
 use crate::gui::ProjectSnapshot;
-use crate::gui::state::{GuiState, SessionMode};
+use crate::gui::state::{CanvasViewMode, GuiState, SessionMode};
 use crate::gui::theme::{LairesTheme, PROSE_FONT};
+use super::canvas_preview;
 
 /// Font used for story prose text (Source Serif 4).
 fn prose_font(size: f32) -> FontId {
@@ -79,12 +80,8 @@ pub fn render(
     }
 
     // Wrap entire canvas in a card frame — fill all available space.
-    // Frame overhead: outer_margin(4*2) + inner_margin(16*2) + stroke(1*2) + shadow(~4)
-    let frame_overhead = 46.0;
-    let target_inner_h = (ui.available_height() - frame_overhead).max(0.0);
     theme.card_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
-        ui.set_min_height(target_inner_h);
 
         // === File tabs (only when multiple files) ===
         if snap.file_texts.len() > 1 {
@@ -92,10 +89,31 @@ pub fn render(
             ui.add_space(4.0);
         }
 
-        // === Breadcrumb header ===
-        render_breadcrumb(ui, state, snap, theme, display_word_count);
+        // Check if preview is available for the selected file
+        let preview_ok = file_supports_preview(state.selected_file.as_deref());
+
+        // If the file doesn't support preview, force back to Markdown mode
+        if !preview_ok && state.canvas_view_mode == CanvasViewMode::Preview {
+            state.canvas_view_mode = CanvasViewMode::Markdown;
+        }
+
+        // === Breadcrumb header + view mode toggle ===
+        render_breadcrumb_with_toggle(ui, state, snap, theme, display_word_count, preview_ok);
 
         ui.add_space(12.0);
+
+        // Read-only hint when in Preview + Workshop
+        if state.canvas_view_mode == CanvasViewMode::Preview
+            && state.session_mode == SessionMode::Workshop
+        {
+            ui.label(
+                RichText::new("Preview is read-only. Switch to Markdown to edit.")
+                    .color(theme.text_secondary)
+                    .size(11.0)
+                    .italics(),
+            );
+            ui.add_space(4.0);
+        }
 
         // Thin divider below breadcrumb
         let rect = ui.available_rect_before_wrap();
@@ -103,8 +121,23 @@ pub fn render(
         ui.painter().rect_filled(sep_rect, 0.0, theme.border);
         ui.add_space(14.0);
 
-        // === Prose content ===
-        if state.session_mode == SessionMode::Workshop {
+        // === Content ===
+        if state.canvas_view_mode == CanvasViewMode::Preview {
+            // Preview mode: parse and render FountainMD
+            egui::ScrollArea::vertical()
+                .id_salt("canvas_preview_scroll")
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add_space(16.0);
+                        ui.vertical(|ui| {
+                            ui.set_max_width((ui.available_width() - 16.0).max(0.0));
+                            let elements = crate::concepts::fountainmd::parse(display_text);
+                            canvas_preview::render(ui, &elements, theme);
+                        });
+                    });
+                });
+        } else if state.session_mode == SessionMode::Workshop {
             render_editable(ui, state, theme);
         } else {
             egui::ScrollArea::vertical()
@@ -199,15 +232,31 @@ fn render_file_tabs(
     });
 }
 
-/// Renders the breadcrumb with project name, file name, selected scene, and reading stats.
-fn render_breadcrumb(
+/// Returns true if the file extension supports FountainMD preview.
+fn file_supports_preview(file_path: Option<&str>) -> bool {
+    match file_path {
+        Some(path) => {
+            let lower = path.to_lowercase();
+            lower.ends_with(".md")
+                || lower.ends_with(".markdown")
+                || lower.ends_with(".fountain")
+        }
+        // No file selected (single-file project) — allow preview
+        None => true,
+    }
+}
+
+/// Renders the breadcrumb with project name, file name, scene, reading stats,
+/// and a Markdown/Preview toggle (when preview is available).
+fn render_breadcrumb_with_toggle(
     ui: &mut egui::Ui,
-    state: &GuiState,
+    state: &mut GuiState,
     snap: &ProjectSnapshot,
     theme: &LairesTheme,
     word_count: usize,
+    preview_available: bool,
 ) {
-    // Top line: PROJECT > FILE > SCENE
+    // Top line: PROJECT > FILE > SCENE ... [Markdown | Preview]
     ui.horizontal(|ui| {
         // Project name
         let project_name = if state.project_title.is_empty() {
@@ -248,7 +297,6 @@ fn render_breadcrumb(
                     .color(theme.text_secondary)
                     .size(11.0),
             );
-            // Find the scene title
             let scene_title = snap
                 .all_scenes
                 .iter()
@@ -262,6 +310,13 @@ fn render_breadcrumb(
                     .size(11.0)
                     .strong(),
             );
+        }
+
+        // Push toggle to the right
+        if preview_available {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                render_view_toggle(ui, state, theme);
+            });
         }
     });
 
@@ -290,6 +345,57 @@ fn render_breadcrumb(
         .color(theme.text_secondary)
         .size(12.0),
     );
+}
+
+/// Segmented Markdown / Preview toggle control.
+fn render_view_toggle(ui: &mut egui::Ui, state: &mut GuiState, theme: &LairesTheme) {
+    let is_markdown = state.canvas_view_mode == CanvasViewMode::Markdown;
+
+    // Preview button (right-to-left, so this is first)
+    let preview_text = RichText::new("Preview").size(11.0).color(if !is_markdown {
+        Color32::WHITE
+    } else {
+        theme.text_secondary
+    });
+    let preview_btn = egui::Button::new(preview_text)
+        .fill(if !is_markdown {
+            theme.accent
+        } else {
+            Color32::TRANSPARENT
+        })
+        .stroke(egui::Stroke::new(1.0, theme.border))
+        .corner_radius(CornerRadius {
+            nw: 0,
+            sw: 0,
+            ne: 4,
+            se: 4,
+        });
+    if ui.add(preview_btn).clicked() {
+        state.canvas_view_mode = CanvasViewMode::Preview;
+    }
+
+    // Markdown button
+    let md_text = RichText::new("Markdown").size(11.0).color(if is_markdown {
+        Color32::WHITE
+    } else {
+        theme.text_secondary
+    });
+    let md_btn = egui::Button::new(md_text)
+        .fill(if is_markdown {
+            theme.accent
+        } else {
+            Color32::TRANSPARENT
+        })
+        .stroke(egui::Stroke::new(1.0, theme.border))
+        .corner_radius(CornerRadius {
+            nw: 4,
+            sw: 4,
+            ne: 0,
+            se: 0,
+        });
+    if ui.add(md_btn).clicked() {
+        state.canvas_view_mode = CanvasViewMode::Markdown;
+    }
 }
 
 /// Renders the prose text with scene boundary dividers instead of colored text.

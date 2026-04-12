@@ -23,6 +23,10 @@ fn context_bar_color(percent: f32) -> Color32 {
 
 /// Renders the chat panel. Returns true if the user submitted a message.
 pub fn render(ui: &mut egui::Ui, state: &mut GuiState, theme: &LairesTheme) -> bool {
+    // Fill the full panel height so egui's PanelState stores the correct rect
+    // (otherwise the panel gradually shrinks to fit content).
+    ui.set_min_height(ui.available_height());
+
     let input_reserved = INPUT_HEIGHT + 20.0;
 
     // === Header row: "Chat" + context bar + session controls + spinner ===
@@ -37,17 +41,21 @@ pub fn render(ui: &mut egui::Ui, state: &mut GuiState, theme: &LairesTheme) -> b
 
     // Message history
     let scroll_height = (ui.available_height() - input_reserved).max(60.0);
+    // Split borrows: pull cache out so we can iterate chat_history and mutate cache.
+    let cache = &mut state.commonmark_cache;
+    let agent_status = &state.agent_status;
     egui::ScrollArea::vertical()
         .id_salt("chat_scroll")
+        .min_scrolled_height(scroll_height)
         .max_height(scroll_height)
         .stick_to_bottom(true)
         .show(ui, |ui| {
             for (msg_idx, msg) in state.chat_history.iter().enumerate() {
-                render_message(ui, msg_idx, msg, theme);
+                render_message(ui, msg_idx, msg, cache, theme);
             }
 
             // Typing indicator when agent is active
-            match &state.agent_status {
+            match agent_status {
                 AgentStatus::Thinking => {
                     render_typing_indicator(ui, "Thinking...", theme);
                 }
@@ -200,6 +208,7 @@ fn render_message(
     ui: &mut egui::Ui,
     msg_idx: usize,
     msg: &crate::gui::state::ChatMessage,
+    md_cache: &mut egui_commonmark::CommonMarkCache,
     theme: &LairesTheme,
 ) {
     let is_user = msg.role == ChatRole::User;
@@ -271,7 +280,7 @@ fn render_message(
                 });
         });
     } else {
-        // Assistant message: left-aligned bubble
+        // Assistant message: left-aligned bubble with markdown rendering
         ui.horizontal(|ui| {
             // Avatar
             render_avatar(ui, "L", theme.accent, theme);
@@ -291,11 +300,8 @@ fn render_message(
                 .inner_margin(egui::Margin::symmetric(12, 8))
                 .show(ui, |ui| {
                     ui.set_max_width((ui.available_width() - 8.0).max(0.0));
-                    ui.label(
-                        RichText::new(&msg.content)
-                            .color(theme.text_primary)
-                            .size(13.0),
-                    );
+                    egui_commonmark::CommonMarkViewer::new()
+                        .show(ui, md_cache, &msg.content);
                 });
         });
     }

@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2024"
 description = "An agentic writing tool powered by narrative graph intelligence"
 license = "MIT"
+repository = "https://github.com/justingibbs/laires"
+homepage = "https://github.com/justingibbs/laires"
+readme = "README.md"
+authors = ["Justin Gibbs <justingibbs@gmail.com>"]
+keywords = ["writing", "fiction", "narrative", "llm", "screenwriting"]
+categories = ["command-line-utilities", "text-processing"]
 
 [dependencies]
 # CLI

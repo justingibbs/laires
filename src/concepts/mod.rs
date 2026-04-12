@@ -1,4 +1,5 @@
 pub mod analysis;
+pub mod fountainmd;
 pub mod canvas;
 pub mod character_perspective;
 pub mod context_budget;

@@ -165,10 +165,10 @@ impl Skills {
             "get_scene_analysis" => self.with_story_access(ctx, |story| {
                 self.exec_get_scene_analysis(args, ctx.graph, &story)
             }),
-            "scan_story" => {
-                // Handled at the agent level (needs mutable graph access).
+            "scan_story" | "create_file" => {
+                // Handled at the agent level (needs mutable access to manifest/graph).
                 // This branch should not be reached in the GUI agent.
-                serde_json::json!({ "error": "scan_story must be handled at the agent level" })
+                serde_json::json!({ "error": format!("{} must be handled at the agent level", skill_name) })
             }
             "get_divergences" => {
                 let intent_ref: Option<&DeclaredIntent> = ctx.intent.as_deref();

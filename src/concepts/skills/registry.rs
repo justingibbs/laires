@@ -290,6 +290,22 @@ impl Skills {
         });
 
         self.register(SkillDefinition {
+            name: "create_file".to_string(),
+            description: "Create a new story or context file in the project. The file is added to the manifest and becomes immediately available for editing.".to_string(),
+            category: SkillCategory::CanvasTools,
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "file": { "type": "string", "description": "Relative file path to create (e.g. 'characters.md', 'chapter-3.md', 'act2/scene1.fountain')" },
+                    "content": { "type": "string", "description": "Initial file content. Defaults to empty." },
+                    "role": { "type": "string", "enum": ["story", "outline", "characters", "notes"], "description": "File role. Defaults to 'story' for .md/.fountain files." },
+                    "format": { "type": "string", "enum": ["prose", "fountain"], "description": "Story format (only for role=story). Defaults to 'prose' for .md, 'fountain' for .fountain." }
+                },
+                "required": ["file"]
+            }),
+        });
+
+        self.register(SkillDefinition {
             name: "scan_story".to_string(),
             description: "Scan and analyze all scenes to populate the narrative graph.".to_string(),
             category: SkillCategory::GraphTools,
