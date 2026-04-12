@@ -7,3 +7,7 @@
 
 .laires/cache/
 .laires/chat_history.json
+
+# Internal dev notes
+scratch.md
+context/

@@ -40,6 +40,14 @@ pub fn render(
         return;
     }
 
+    // Handle search navigation: switch to the target file
+    if let Some(nav_file) = state.search_navigate_file.take() {
+        if snap.file_texts.contains_key(&nav_file) {
+            state.selected_file = Some(nav_file);
+            state.canvas_dirty = false; // allow buffer sync below
+        }
+    }
+
     // Auto-select first file if none selected and we have per-file data
     if state.selected_file.is_none() && !snap.file_texts.is_empty() {
         // Use the first story file from the ordered list
@@ -122,6 +130,14 @@ pub fn render(
         ui.add_space(14.0);
 
         // === Content ===
+        // Consume search state before branching so it doesn't go stale.
+        let scroll_target = state.search_scroll_to_line.take();
+        let search_query = if state.search_query.is_empty() {
+            None
+        } else {
+            Some(state.search_query.clone())
+        };
+
         if state.canvas_view_mode == CanvasViewMode::Preview {
             // Preview mode: parse and render FountainMD
             egui::ScrollArea::vertical()
@@ -149,7 +165,7 @@ pub fn render(
                         ui.add_space(16.0);
                         ui.vertical(|ui| {
                             ui.set_max_width((ui.available_width() - 16.0).max(0.0));
-                            render_prose(ui, display_text, display_boundaries, theme);
+                            render_prose(ui, display_text, display_boundaries, theme, search_query.as_deref(), scroll_target);
                         });
                     });
                 });
@@ -398,19 +414,48 @@ fn render_view_toggle(ui: &mut egui::Ui, state: &mut GuiState, theme: &LairesThe
     }
 }
 
+/// Highlight color for search matches.
+const SEARCH_HIGHLIGHT_BG: Color32 = Color32::from_rgb(255, 245, 200);
+const SEARCH_SCROLL_TARGET_BG: Color32 = Color32::from_rgb(255, 230, 150);
+
 /// Renders the prose text with scene boundary dividers instead of colored text.
 fn render_prose(
     ui: &mut egui::Ui,
     text: &str,
     boundary_lines: &std::collections::HashSet<usize>,
     theme: &LairesTheme,
+    search_query: Option<&str>,
+    scroll_to_line: Option<usize>,
 ) {
+    let query_lower = search_query
+        .filter(|q| !q.is_empty())
+        .map(|q| q.to_lowercase());
+
     // Increase line spacing for readability
     let prev_spacing = ui.spacing().item_spacing.y;
     ui.spacing_mut().item_spacing.y = 4.0;
 
     for (line_idx, line) in text.lines().enumerate() {
         let is_boundary = boundary_lines.contains(&line_idx);
+        let is_scroll_target = scroll_to_line == Some(line_idx);
+        let is_match = query_lower
+            .as_ref()
+            .is_some_and(|q| line.to_lowercase().contains(q.as_str()));
+
+        // Draw highlight background for matching lines
+        if is_match || is_scroll_target {
+            let bg = if is_scroll_target {
+                SEARCH_SCROLL_TARGET_BG
+            } else {
+                SEARCH_HIGHLIGHT_BG
+            };
+            let rect = ui.available_rect_before_wrap();
+            // Paint a full-width highlight behind the next line
+            let highlight_rect =
+                egui::Rect::from_min_size(rect.min, Vec2::new(rect.width(), 24.0));
+            ui.painter()
+                .rect_filled(highlight_rect, CornerRadius::same(2), bg);
+        }
 
         if is_boundary {
             // Scene boundary: subtle horizontal rule + scene header
@@ -423,12 +468,16 @@ fn render_prose(
             ui.add_space(6.0);
 
             // Scene heading in small secondary text
-            ui.label(
+            let resp = ui.label(
                 RichText::new(line)
                     .color(theme.text_secondary)
                     .size(12.0)
                     .strong(),
             );
+
+            if is_scroll_target {
+                resp.scroll_to_me(Some(egui::Align::Center));
+            }
 
             ui.add_space(8.0);
         } else if line.trim().is_empty() {
@@ -436,11 +485,15 @@ fn render_prose(
             ui.add_space(6.0);
         } else {
             // Normal prose line
-            ui.label(
+            let resp = ui.label(
                 RichText::new(line)
                     .font(prose_font(16.0))
                     .color(theme.prose_color),
             );
+
+            if is_scroll_target {
+                resp.scroll_to_me(Some(egui::Align::Center));
+            }
         }
     }
 

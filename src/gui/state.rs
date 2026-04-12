@@ -234,6 +234,24 @@ pub struct GuiState {
 
     // Markdown rendering cache for chat messages
     pub commonmark_cache: egui_commonmark::CommonMarkCache,
+
+    // Search
+    pub search_query: String,
+    pub search_results: Vec<SearchResult>,
+    pub search_active: bool,
+    pub search_selected_index: usize,
+    /// When set, canvas scrolls to this 0-based line index then clears it.
+    pub search_scroll_to_line: Option<usize>,
+    /// File to switch to when navigating a search result.
+    pub search_navigate_file: Option<String>,
+}
+
+/// A single search hit for the GUI search bar.
+#[derive(Debug, Clone)]
+pub struct SearchResult {
+    pub file_path: String,
+    pub line_number: usize, // 1-based
+    pub context: String,
 }
 
 /// How the canvas displays content.
@@ -332,6 +350,12 @@ impl Default for GuiState {
             new_session_requested: false,
             compact_context_requested: false,
             commonmark_cache: egui_commonmark::CommonMarkCache::default(),
+            search_query: String::new(),
+            search_results: Vec::new(),
+            search_active: false,
+            search_selected_index: 0,
+            search_scroll_to_line: None,
+            search_navigate_file: None,
         }
     }
 }

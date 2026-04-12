@@ -421,6 +421,18 @@ impl GuiApp {
             )) {
                 self.open_settings_dialog();
             }
+            // Cmd/Ctrl+F → Focus search bar
+            if input.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::CTRL | egui::Modifiers::MAC_CMD,
+                egui::Key::F,
+            )) {
+                self.gui_state.search_active = true;
+                ctx.memory_mut(|mem| {
+                    mem.request_focus(egui::Id::new(
+                        panels::status_bar::SEARCH_INPUT_ID,
+                    ));
+                });
+            }
         });
     }
 
@@ -975,7 +987,7 @@ impl GuiApp {
     /// Render the project screen (AppMode::Project) — the existing 3-pane layout.
     fn render_project_screen(&mut self, ctx: &egui::Context) {
         // Top navigation bar
-        panels::status_bar::render(ctx, &self.gui_state, &self.snapshot, &self.theme);
+        panels::status_bar::render(ctx, &mut self.gui_state, &self.snapshot, &self.theme);
 
         // Check if scan was requested via top bar button
         let top_bar_scan = ctx.memory_mut(|mem| {

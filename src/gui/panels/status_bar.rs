@@ -1,13 +1,16 @@
 use eframe::egui::{self, Color32, CornerRadius, RichText, Stroke};
 
 use crate::gui::ProjectSnapshot;
-use crate::gui::state::{AgentStatus, AppMode, GuiState, SessionMode};
+use crate::gui::state::{AgentStatus, AppMode, GuiState, RightTab, SearchResult, SessionMode};
 use crate::gui::theme::LairesTheme;
+
+/// Stable ID for the search text input — used to request focus from Cmd+F.
+pub const SEARCH_INPUT_ID: &str = "search_bar_input";
 
 /// Renders the top navigation bar (branded header with search + actions).
 pub fn render(
     ctx: &egui::Context,
-    state: &GuiState,
+    state: &mut GuiState,
     snapshot: &Option<ProjectSnapshot>,
     theme: &LairesTheme,
 ) {
@@ -111,7 +114,7 @@ pub fn render(
                 if !is_narrow {
                     ui.add_space(16.0);
                     let search_width = (ui.available_width() - 280.0).max(80.0);
-                    ui.allocate_ui(egui::vec2(search_width, 32.0), |ui| {
+                    let search_bar_resp = ui.allocate_ui(egui::vec2(search_width, 32.0), |ui| {
                         ui.add_space(4.0);
                         egui::Frame::NONE
                             .fill(theme.bg_secondary)
@@ -125,14 +128,38 @@ pub fn render(
                                             .color(theme.text_secondary)
                                             .size(12.0),
                                     );
-                                    ui.label(
-                                        RichText::new("Search story elements...")
-                                            .color(theme.text_secondary)
-                                            .size(12.0),
-                                    );
+                                    let te = egui::TextEdit::singleline(&mut state.search_query)
+                                        .hint_text("Search story elements...")
+                                        .text_color(theme.text_primary)
+                                        .font(egui::FontId::proportional(12.0))
+                                        .frame(false)
+                                        .desired_width(ui.available_width())
+                                        .id(egui::Id::new(SEARCH_INPUT_ID));
+                                    let response = ui.add(te);
+
+                                    // Run search when query changes
+                                    if response.changed() {
+                                        state.search_results = run_search(&state.search_query, snapshot);
+                                        state.search_selected_index = 0;
+                                        state.search_active = !state.search_query.is_empty();
+                                    }
+
+                                    // Open dropdown when the input gains focus and has a query
+                                    if response.gained_focus() && !state.search_query.is_empty() {
+                                        state.search_active = true;
+                                    }
                                 });
                             });
                     });
+
+                    // Show dropdown whenever active and there are results.
+                    // Dismissal is handled explicitly: Escape, navigation, or
+                    // clearing the query — NOT by TextEdit focus loss, which
+                    // would race with the click on the dropdown button.
+                    if state.search_active && !state.search_results.is_empty() {
+                        let bar_rect = search_bar_resp.response.rect;
+                        render_search_dropdown(ctx, state, theme, bar_rect);
+                    }
                 }
 
                 // === Right section: Stats + Actions ===
@@ -234,4 +261,221 @@ pub fn render(
                 });
             });
         });
+}
+
+/// Run a case-insensitive substring search across all file texts in the snapshot.
+fn run_search(query: &str, snapshot: &Option<ProjectSnapshot>) -> Vec<SearchResult> {
+    let Some(snap) = snapshot else {
+        return Vec::new();
+    };
+    let query_lower = query.to_lowercase();
+    if query_lower.is_empty() {
+        return Vec::new();
+    }
+
+    let mut results = Vec::new();
+
+    // Search per-file texts (ordered by story_files for stable ordering)
+    if !snap.file_texts.is_empty() {
+        for file_path in &snap.story_files {
+            if let Some(ftd) = snap.file_texts.get(file_path) {
+                for (line_idx, line) in ftd.text.lines().enumerate() {
+                    if line.to_lowercase().contains(&query_lower) {
+                        results.push(SearchResult {
+                            file_path: file_path.clone(),
+                            line_number: line_idx + 1,
+                            context: line.trim().to_string(),
+                        });
+                        if results.len() >= 50 {
+                            return results;
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // Single-file fallback: search combined story_text
+        for (line_idx, line) in snap.story_text.lines().enumerate() {
+            if line.to_lowercase().contains(&query_lower) {
+                results.push(SearchResult {
+                    file_path: String::new(),
+                    line_number: line_idx + 1,
+                    context: line.trim().to_string(),
+                });
+                if results.len() >= 50 {
+                    return results;
+                }
+            }
+        }
+    }
+
+    results
+}
+
+/// Renders a floating dropdown of search results below the search bar.
+fn render_search_dropdown(
+    ctx: &egui::Context,
+    state: &mut GuiState,
+    theme: &LairesTheme,
+    bar_rect: egui::Rect,
+) {
+    // Handle keyboard navigation while search is active
+    ctx.input(|i| {
+        if i.key_pressed(egui::Key::ArrowDown) || (i.key_pressed(egui::Key::Enter) && i.modifiers.shift) {
+            // intentionally empty — handled below
+        }
+    });
+    let move_down = ctx.input(|i| i.key_pressed(egui::Key::ArrowDown));
+    let move_up = ctx.input(|i| i.key_pressed(egui::Key::ArrowUp));
+    let confirm = ctx.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
+    let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+
+    if escape {
+        state.search_active = false;
+        state.search_query.clear();
+        state.search_results.clear();
+        return;
+    }
+
+    let result_count = state.search_results.len();
+    if move_down && result_count > 0 {
+        state.search_selected_index = (state.search_selected_index + 1).min(result_count - 1);
+    }
+    if move_up && state.search_selected_index > 0 {
+        state.search_selected_index -= 1;
+    }
+    if confirm && state.search_selected_index < result_count {
+        navigate_to_result(state, state.search_selected_index);
+        return;
+    }
+
+    let dropdown_pos = egui::pos2(bar_rect.left(), bar_rect.bottom() + 4.0);
+    let dropdown_width = bar_rect.width().max(300.0);
+    let max_visible = 10;
+    let row_height = 28.0;
+    let dropdown_height = (result_count.min(max_visible) as f32) * row_height + 8.0;
+
+    egui::Area::new(egui::Id::new("search_results_dropdown"))
+        .fixed_pos(dropdown_pos)
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            egui::Frame::NONE
+                .fill(Color32::WHITE)
+                .stroke(Stroke::new(1.0, theme.border))
+                .corner_radius(CornerRadius::same(8))
+                .inner_margin(egui::Margin::symmetric(4, 4))
+                .shadow(egui::epaint::Shadow {
+                    offset: [0, 2],
+                    blur: 8,
+                    spread: 0,
+                    color: Color32::from_black_alpha(20),
+                })
+                .show(ui, |ui| {
+                    ui.set_width(dropdown_width);
+                    egui::ScrollArea::vertical()
+                        .max_height(dropdown_height)
+                        .auto_shrink([false; 2])
+                        .show(ui, |ui| {
+                            let mut clicked_idx: Option<usize> = None;
+
+                            for (idx, result) in state.search_results.clone().iter().enumerate() {
+                                let is_selected = idx == state.search_selected_index;
+
+                                // Build the row label text
+                                let file_label = if result.file_path.is_empty() {
+                                    format!("L{}", result.line_number)
+                                } else {
+                                    let fname = std::path::Path::new(&result.file_path)
+                                        .file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or(&result.file_path);
+                                    format!("{}:{}", fname, result.line_number)
+                                };
+                                let context = if result.context.len() > 80 {
+                                    format!("{}...", &result.context[..77])
+                                } else {
+                                    result.context.clone()
+                                };
+
+                                // Use a LayoutJob for colored file label + context
+                                let mut job = egui::text::LayoutJob::default();
+                                job.append(
+                                    &file_label,
+                                    0.0,
+                                    egui::TextFormat {
+                                        font_id: egui::FontId::proportional(11.0),
+                                        color: theme.accent,
+                                        ..Default::default()
+                                    },
+                                );
+                                job.append(
+                                    &format!("  {context}"),
+                                    0.0,
+                                    egui::TextFormat {
+                                        font_id: egui::FontId::proportional(11.0),
+                                        color: theme.text_primary,
+                                        ..Default::default()
+                                    },
+                                );
+                                let btn_text = egui::WidgetText::from(job);
+
+                                let fill = if is_selected {
+                                    theme.accent.gamma_multiply(0.12)
+                                } else {
+                                    Color32::TRANSPARENT
+                                };
+                                let btn = egui::Button::new(btn_text)
+                                    .fill(fill)
+                                    .stroke(Stroke::NONE)
+                                    .corner_radius(CornerRadius::same(4))
+                                    .min_size(egui::vec2(dropdown_width - 8.0, 0.0));
+
+                                let response = ui.add(btn);
+                                if response.clicked() {
+                                    clicked_idx = Some(idx);
+                                }
+                                if response.hovered() {
+                                    state.search_selected_index = idx;
+                                }
+                            }
+
+                            if let Some(idx) = clicked_idx {
+                                state.search_selected_index = idx;
+                                navigate_to_result(state, idx);
+                            }
+                        });
+
+                    // Result count footer
+                    ui.horizontal(|ui| {
+                        ui.add_space(8.0);
+                        let count_text = if state.search_results.len() >= 50 {
+                            "50+ matches".to_string()
+                        } else {
+                            format!(
+                                "{} {}",
+                                state.search_results.len(),
+                                if state.search_results.len() == 1 { "match" } else { "matches" }
+                            )
+                        };
+                        ui.label(
+                            RichText::new(count_text)
+                                .color(theme.text_secondary)
+                                .size(10.0),
+                        );
+                    });
+                });
+        });
+}
+
+/// Navigate to a search result: switch file, set scroll target, switch to Canvas tab.
+fn navigate_to_result(state: &mut GuiState, index: usize) {
+    if let Some(result) = state.search_results.get(index) {
+        if !result.file_path.is_empty() {
+            state.search_navigate_file = Some(result.file_path.clone());
+        }
+        state.search_scroll_to_line = Some(result.line_number.saturating_sub(1)); // 0-based
+        state.active_right_tab = RightTab::Canvas;
+        state.selected_scene_id = None;
+        state.search_active = false;
+    }
 }
