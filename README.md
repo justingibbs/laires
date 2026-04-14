@@ -1,110 +1,88 @@
-# Laires.ai
+# Laires
 
-An agentic writing tool that treats fiction manuscripts like codebases. Laires builds a **narrative graph** — a structured model of characters, objectives, conflicts, and scenes — and uses an LLM agent to provide structural analysis, perspective interpretation, consistency checking, and co-writing assistance.
+[![CI](https://github.com/justingibbs/laires/actions/workflows/ci.yml/badge.svg)](https://github.com/justingibbs/laires/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+What if you could `git diff` your plot? Laires treats your novel or screenplay like a codebase — it builds a **narrative graph** of characters, conflicts, and arcs from your manuscript, then gives you an LLM agent with 28 tools to query, lint, and co-edit your story.
+
+![Laires Dashboard](docs/dashboard.png)
+![Laires Graph](docs/graph.png)
+
+## Why Laires?
+
+Word processors know nothing about your story. They see paragraphs, not characters. Laires bridges the gap — it parses your manuscript into a structured model, then lets an AI agent reason about plot, consistency, and perspective using that structure. Think of it as IDE-level tooling for writing.
+
+## Status
+
+**Alpha** — functional and tested (225+ tests), but APIs may change. Feedback and contributions welcome.
+
+## Features
+
+- **Narrative graph** — Extracts characters, objectives, conflicts, and relationships into a structured, queryable graph
+- **Native desktop GUI** — Single-binary desktop app with chat, canvas, scene sidebar, and force-directed graph visualization
+- **Two operating modes** — *Consultant* for read-only analysis with revision briefs; *Workshop* for live co-editing
+- **Multi-turn agent chat** — 28 built-in tools for querying the graph, searching text, running lint checks, analyzing pacing, and more
+- **Character perspectives** — LLM-powered subjective interpretation of scenes through any character's eyes
+- **Multi-file projects** — Novels, screenplays, or any multi-document project with automatic file discovery
+- **Prose and Fountain** — Markdown prose and Fountain screenplay format, plus .docx import
+- **Multiple LLM providers** — Anthropic, OpenAI, Gemini, Ollama, or any OpenAI-compatible endpoint
+- **Consistency checking** — Lint rules and divergence detection to catch contradictions and plot holes
+- **Custom skills** — Extend the agent with your own TOML-defined tools
+- **VCS integration** — `laires diff` and `laires log` show narrative graph changes across git/jj commits
 
 ## Prerequisites
 
-- [Rust toolchain](https://rustup.rs/) (1.93+)
-- A Gemini API key (default) or other LLM provider key
+- [Rust toolchain](https://rustup.rs/) (1.85+, edition 2024)
+- An LLM API key (Gemini, Anthropic, OpenAI, or a local model via Ollama)
 
 ## Installation
 
 ```bash
-git clone <repo-url> && cd laires
+git clone https://github.com/justingibbs/laires.git && cd laires
 cargo install --path .
 ```
 
-This installs the `laires` binary to `~/.cargo/bin/`, which should already be on your `$PATH`.
-
-## Quick Start
-
-### 1. Create a project directory
+## Quick start
 
 ```bash
+# Create a project
 mkdir my-novel && cd my-novel
-```
 
-### 2. Add your API key
-
-Create a `.env` file in the project root:
-
-```bash
+# Add your API key
 echo 'GEMINI_API_KEY=your-key-here' > .env
-```
 
-### 3. Initialize the project
-
-```bash
+# Initialize
 laires init --title "My Novel"
-```
 
-This creates:
-- `story.md` — your manuscript (single file)
-- `.laires/config.toml` — project configuration
-- `.laires/graph.json` — narrative graph (populated by scan)
-- `.laires/scenes.json` — scene boundary map
-- `.laires/cache/` — analysis cache
-
-### 4. Write your story
-
-Edit `story.md` with your editor. Use Markdown headings or horizontal rules (`---`) to separate scenes:
-
-```markdown
-## The Arrival
-
-Elena stepped off the train into the cold morning air. The town
-looked nothing like the photographs.
-
----
-
-## The Letter
-
-Marcus found the letter tucked inside the old piano. The handwriting
-was unmistakable.
-```
-
-### 5. Analyze your manuscript
-
-```bash
+# Write your story in story.md, then analyze it
 laires scan
+
+# Explore
+laires graph                    # print narrative graph summary
+laires chat                     # interactive agent chat
+laires gui                      # launch the desktop GUI
 ```
 
-This sends each scene to the LLM, which extracts characters, objectives, conflicts, and scene metadata into the narrative graph.
-
-### 6. Explore the graph
-
-```bash
-laires graph                    # print full graph summary
-laires graph --character elena  # show a specific character's arc
-laires graph --json             # output raw JSON
-```
-
-### 7. Chat with the agent
-
-```bash
-laires chat
-```
-
-An interactive session where the agent has access to your narrative graph and can search/read your story. Ask questions like:
-- "Where does Marcus's motivation break down?"
-- "Which scenes lack a clear conflict?"
-- "Summarize Elena's arc across all scenes"
-
-Type `quit` to exit.
+Separate scenes with Markdown headings (`## Chapter Title`) or horizontal rules (`---`). For screenplays, use `laires init --title "Title" --fountain` and standard Fountain scene headings (`INT. COFFEE SHOP - DAY`).
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
 | `laires init --title "Title"` | Initialize a new project |
-| `laires init --title "Title" --fountain` | Initialize as a screenplay project |
 | `laires scan` | Analyze all scenes with the LLM |
-| `laires scan --scene 3` | Re-analyze only scene 3 |
 | `laires graph` | Print narrative graph summary |
-| `laires graph --character name` | Show a character's arc |
-| `laires graph --json` | Output graph as JSON |
 | `laires status` | Show project stats |
 | `laires chat` | Interactive agent chat |
+| `laires gui` | Native desktop GUI |
+| `laires open` | Split-pane terminal UI with overlays |
+| `laires lint` | Run consistency checks |
+| `laires diff` | Graph changes since last commit |
+| `laires perspective <char>` | View a scene through a character's eyes |
+| `laires brief` | View or list revision briefs |
+| `laires convert <file>` | Convert .docx/.txt to .md |
+
+Run `laires --help` for full usage details.
 
 ## Configuration
 
@@ -124,62 +102,39 @@ format = "prose"
 [analysis]
 debounce_ms = 2000
 auto_scan = true
-
-[privacy]
-restricted_when_cloud = []
 ```
 
-### Supported Providers
+### Supported providers
 
 | Provider | `provider` value | `api_key_env` | `base_url` |
 |----------|-----------------|---------------|------------|
 | Google Gemini | `"gemini"` | `GEMINI_API_KEY` | `https://generativelanguage.googleapis.com/v1beta/openai` |
 | Anthropic | `"anthropic"` | `ANTHROPIC_API_KEY` | `https://api.anthropic.com` |
 | OpenAI | `"openai"` | `OPENAI_API_KEY` | `https://api.openai.com/v1` |
-| Local (Ollama, etc.) | `"local"` | — | `http://localhost:11434/v1` |
+| Local (Ollama) | `"local"` | — | `http://localhost:11434/v1` |
 
-To switch providers, edit `.laires/config.toml` and set your API key in `.env`.
+## Architecture
 
-## Scene Detection
+Laires is built on the **Concept & Synchronization** pattern (Jackson & Meng, MIT CSAIL) — 10 independent concept modules coordinated through explicit synchronizations. See [docs/overview.md](docs/overview.md) for the full technical overview.
 
-Laires automatically detects scene boundaries in your manuscript.
+## Known limitations
 
-**Prose mode** (Markdown) recognizes:
-- Markdown headings: `## Chapter 1`, `### The Arrival`
-- Horizontal rules: `---`, `***`, `___`
-- HTML comment markers: `<!-- scene: "The Confrontation" -->`
-
-**Fountain mode** (screenplays) recognizes:
-- Scene headings: `INT. COFFEE SHOP - DAY`, `EXT. PARKING LOT - NIGHT`
-
-## Project Structure
-
-```
-my-novel/
-├── .env                    # API keys (git-ignored)
-├── story.md                # your manuscript
-├── .laires/
-│   ├── config.toml         # project configuration
-│   ├── graph.json          # narrative graph
-│   ├── scenes.json         # scene boundary map
-│   └── cache/              # LLM analysis cache (git-ignored)
-└── .gitignore
-```
+- No streaming responses yet — the agent returns full replies after processing
+- Graph visualization in the GUI is functional but basic (no arc overlays)
+- Edition 2024 requires a recent Rust toolchain (1.85+)
+- LLM analysis quality depends on the model — larger models produce better narrative graphs
 
 ## Development
 
 ```bash
-cargo build              # build
-cargo test               # run tests (19 tests)
-cargo run -- status      # run without installing
+cargo build              # build (debug)
+cargo test               # run tests (~225 tests)
+cargo fmt                # format code
+cargo clippy             # lint
 ```
 
-## Architecture
-
-Laires is built on the **Concept & Synchronization** pattern (Jackson & Meng, MIT CSAIL). The system is composed of 10 independent concepts — each with its own state, actions, and invariants — coordinated through explicit synchronizations.
-
-See `context/laires-spec.md` for the full technical specification.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on submitting changes.
 
 ## License
 
-MIT
+[MIT](LICENSE)

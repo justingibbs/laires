@@ -2,7 +2,7 @@ use crate::concepts::declared_intent::DeclaredIntent;
 use crate::concepts::narrative_graph::{GraphNode, NarrativeGraph};
 use crate::concepts::scene_map::{ParseMode, SceneMap};
 use crate::concepts::text_buffer::TextBuffer;
-use crate::config::{self, ProjectConfig, LAIRES_DIR, OVERRIDES_FILE};
+use crate::config::{self, LAIRES_DIR, OVERRIDES_FILE, ProjectConfig};
 use crate::sync::divergence;
 
 pub fn run() -> anyhow::Result<()> {
@@ -26,7 +26,7 @@ pub fn run() -> anyhow::Result<()> {
         _ => ParseMode::Prose,
     };
     let mut scene_map = SceneMap::new(parse_mode);
-    scene_map.full_reindex(&full_text);
+    scene_map.full_reindex(&full_text, "");
 
     // Load graph
     let graph_path = project_root.join(LAIRES_DIR).join("graph.json");

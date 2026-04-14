@@ -1,16 +1,13 @@
 use std::io::{self, BufRead, Write};
 
-use crate::concepts::character_perspective::CharacterPerspective;
-use crate::concepts::declared_intent::DeclaredIntent;
-use crate::concepts::narrative_graph::NarrativeGraph;
-use crate::concepts::provider::{Message, Provider, Role, ToolResult};
-use crate::concepts::scene_map::{ParseMode, SceneMap};
-use crate::concepts::skills::{SkillContext, Skills};
-use crate::concepts::text_buffer::TextBuffer;
-use crate::config::{
-    self, ProjectConfig, CHAT_HISTORY_FILE, LAIRES_DIR, OVERRIDES_FILE, PERSPECTIVES_CACHE_DIR,
+use crate::concepts::provider::{Message, ToolCall, ToolResult};
+use crate::concepts::skills::{SkillContext, SkillSetContext};
+use crate::config::{self, CHAT_HISTORY_FILE, LAIRES_DIR};
+use crate::runtime::agent_session::{
+    AgentSession, ChatTurnError, ChatTurnRequest, SessionEvent, truncate_json,
 };
-use crate::sync::divergence;
+use crate::runtime::project_loader::load_project;
+use crate::runtime::story_access::StoryAccess;
 
 const SYSTEM_PROMPT: &str = r#"You are Laires, an intelligent narrative analysis agent for fiction writers. You have deep understanding of story structure, character arcs, objectives, conflicts, and pacing.
 
@@ -26,73 +23,42 @@ When answering questions:
 
 You can use tools to search the story, read scenes, query the graph, analyze character arcs, run perspective analysis, detect blind spots, lint for consistency issues, and check pacing."#;
 
-/// Maximum tool-use turns per user message to prevent runaway loops
-const MAX_TOOL_TURNS: usize = 10;
+struct ChatToolRuntime<'a> {
+    text_buffer: &'a mut crate::concepts::text_buffer::TextBuffer,
+    scene_map: &'a mut crate::concepts::scene_map::SceneMap,
+    graph: &'a crate::concepts::narrative_graph::NarrativeGraph,
+    intent: &'a mut crate::concepts::declared_intent::DeclaredIntent,
+    perspectives: &'a mut crate::concepts::character_perspective::CharacterPerspective,
+    manifest: Option<&'a crate::concepts::manifest::Manifest>,
+    file_buffer_manager: Option<&'a mut crate::concepts::file_buffer_manager::FileBufferManager>,
+    project_root: &'a std::path::Path,
+}
 
 pub async fn run(new_session: bool) -> anyhow::Result<()> {
     let project_dir = std::env::current_dir()?;
     let project_root = config::find_project_root(&project_dir)
         .ok_or_else(|| anyhow::anyhow!("Not in a Laires project. Run `laires init` first."))?;
 
-    let config = ProjectConfig::load(&project_root)?;
-    let story_path = config::story_file_path(&project_root, &config.project.format);
-
-    if !story_path.exists() {
-        anyhow::bail!("Story file not found: {}", story_path.display());
-    }
-
-    // Load all state
-    let mut text_buffer = TextBuffer::from_file(story_path)?;
-    let full_text = text_buffer.read_all();
-
-    let parse_mode = match config.project.format.as_str() {
-        "fountain" => ParseMode::Fountain,
-        _ => ParseMode::Prose,
-    };
-    let mut scene_map = SceneMap::new(parse_mode);
-    scene_map.full_reindex(&full_text);
-
-    let graph_path = project_root.join(LAIRES_DIR).join("graph.json");
-    let graph = if graph_path.exists() {
-        NarrativeGraph::load(&graph_path).unwrap_or_default()
-    } else {
-        NarrativeGraph::new()
-    };
-
-    // Load or create DeclaredIntent
-    let overrides_path = project_root.join(LAIRES_DIR).join(OVERRIDES_FILE);
-    let mut intent = if overrides_path.exists() {
-        DeclaredIntent::load(&overrides_path).unwrap_or_default()
-    } else {
-        DeclaredIntent::new()
-    };
-
-    // Initialize CharacterPerspective cache (with disk persistence)
-    let perspectives_dir = project_root.join(LAIRES_DIR).join(PERSPECTIVES_CACHE_DIR);
-    let perspectives_path = perspectives_dir.join("perspectives.json");
-    let graph_json_for_hash = graph.serialize_compact();
-    let graph_hash = blake3::hash(graph_json_for_hash.as_bytes()).to_hex().to_string();
-    let mut perspectives = if perspectives_path.exists() {
-        let mut p = CharacterPerspective::load(&perspectives_path).unwrap_or_default();
-        p.invalidate_by_graph_hash(&graph_hash);
-        p
-    } else {
-        CharacterPerspective::new()
-    };
-
-    let mut provider = Provider::from_project_config(&config)?;
-    let mut skills = Skills::new();
-
-    // Apply cloud skill restrictions (S5 sync)
-    if !provider.is_local() {
-        for restricted in &config.privacy.restricted_when_cloud {
-            skills.set_permission(restricted, crate::concepts::skills::Permission::Disabled);
-        }
-    }
+    let load_result = load_project(&project_root)?;
+    let mut text_buffer = load_result.project.text_buffer;
+    let mut scene_map = load_result.project.scene_map;
+    let graph = load_result.project.graph;
+    let mut intent = load_result.project.intent;
+    let mut perspectives = load_result.project.perspectives;
+    let manifest = load_result.project.manifest;
+    let mut file_buffer_manager = load_result.project.file_buffer_manager;
+    let config = load_result.project.config;
+    let mut provider = load_result.provider;
+    let mut skills = load_result.skills;
+    let overrides_path = project_root.join(LAIRES_DIR).join("overrides.json");
+    let perspectives_path = project_root
+        .join(LAIRES_DIR)
+        .join("cache/perspectives")
+        .join("perspectives.json");
 
     // Load or initialize chat history
     let history_path = project_root.join(LAIRES_DIR).join(CHAT_HISTORY_FILE);
-    let mut history: Vec<Message> = if !new_session && history_path.exists() {
+    let history: Vec<Message> = if !new_session && history_path.exists() {
         match std::fs::read_to_string(&history_path) {
             Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
             Err(_) => Vec::new(),
@@ -100,6 +66,7 @@ pub async fn run(new_session: bool) -> anyhow::Result<()> {
     } else {
         Vec::new()
     };
+    let mut session = AgentSession::with_history(history);
 
     let privacy = if provider.is_local() {
         "local"
@@ -108,14 +75,19 @@ pub async fn run(new_session: bool) -> anyhow::Result<()> {
     };
 
     println!("Laires Chat - {} ({})", config.project.title, privacy);
+    let story = StoryAccess::new(&text_buffer, &scene_map, file_buffer_manager.as_ref());
+
     println!(
         "Model: {} | {} scene(s) | {} characters",
         provider.model_name(),
-        scene_map.scene_count(),
+        story.scene_count(),
         graph.get_characters().len()
     );
-    if !history.is_empty() {
-        println!("Resumed session ({} messages). Use --new-session to start fresh.", history.len());
+    if !session.history().is_empty() {
+        println!(
+            "Resumed session ({} messages). Use --new-session to start fresh.",
+            session.history().len()
+        );
     }
     println!("Type your message, or 'quit' to exit.\n");
 
@@ -137,161 +109,89 @@ pub async fn run(new_session: bool) -> anyhow::Result<()> {
             break;
         }
 
-        // Assemble context (Sync S4.1)
-        let graph_json = graph.serialize_compact();
-        let pending = scene_map.get_pending();
-        let staleness_note = if pending.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "\n[Note: {} scene(s) have unanalyzed changes. Graph may be stale.]",
-                pending.len()
-            )
-        };
-
-        // Include divergences in context
-        let divs = divergence::detect_divergences(&graph, &intent);
-        let div_note = if divs.is_empty() {
-            String::new()
-        } else {
-            let div_json = serde_json::to_string(&divs).unwrap_or_default();
-            format!("\n\nActive divergences (inferred vs writer-declared):\n{div_json}")
-        };
-
-        let context_msg = format!(
-            "Current narrative graph:\n```json\n{graph_json}\n```{staleness_note}{div_note}"
-        );
-
-        // Build messages for the LLM
-        let mut messages = vec![Message {
-            role: Role::User,
-            content: context_msg,
-            tool_calls: None,
-            tool_results: None,
-        }];
-
-        // Add history
-        messages.extend(history.clone());
-
-        // Add current user message
-        messages.push(Message {
-            role: Role::User,
-            content: input.to_string(),
-            tool_calls: None,
-            tool_results: None,
+        let prepared = session.prepare_chat_turn(ChatTurnRequest {
+            user_input: input,
+            system_prompt: SYSTEM_PROMPT,
+            graph: &graph,
+            intent: &intent,
+            text_buffer: &text_buffer,
+            scene_map: &scene_map,
+            file_buffer_manager: file_buffer_manager.as_ref(),
+            skills: &skills,
+            skill_context: SkillSetContext::Chat,
         });
+        let mut tool_runtime = ChatToolRuntime {
+            text_buffer: &mut text_buffer,
+            scene_map: &mut scene_map,
+            graph: &graph,
+            intent: &mut intent,
+            perspectives: &mut perspectives,
+            manifest: manifest.as_ref(),
+            file_buffer_manager: file_buffer_manager.as_mut(),
+            project_root: &project_root,
+        };
 
-        // Get tool schemas
-        let tool_schemas = skills.tool_schemas();
-
-        // Multi-turn agent loop
         print!("\n");
-        let mut turn_count = 0;
-        let mut final_text = None;
-
-        loop {
-            if turn_count >= MAX_TOOL_TURNS {
-                println!("[Safety: max tool turns reached]");
-                break;
-            }
-
-            match provider
-                .complete(&messages, &tool_schemas, Some(SYSTEM_PROMPT))
-                .await
-            {
-                Ok(response) => {
-                    if response.tool_calls.is_empty() {
-                        // No tool calls — this is the final response
-                        final_text = response.content;
-                        break;
+        match session
+            .run_prepared_turn(
+                &mut provider,
+                &mut skills,
+                &mut tool_runtime,
+                input,
+                prepared,
+                |tool_calls, provider, skills, runtime| {
+                    Box::pin(execute_chat_tool_calls(
+                        tool_calls, provider, skills, runtime,
+                    ))
+                },
+                |event| match event {
+                    SessionEvent::ContextPrepared { report } => {
+                        eprintln!("[context] {}", report.summary());
                     }
-
-                    // Process tool calls
-                    let mut tool_results = Vec::new();
-                    for tc in &response.tool_calls {
-                        let mut ctx = SkillContext {
-                            text_buffer: &mut text_buffer,
-                            scene_map: &mut scene_map,
-                            graph: &graph,
-                            intent: Some(&mut intent),
-                            perspectives: Some(&mut perspectives),
-                            canvas: None,
-                        };
-
-                        let result = skills
-                            .invoke(&tc.name, &tc.arguments, &mut ctx, Some(&mut provider))
-                            .await;
-
-                        println!(
-                            "[tool: {} -> {}]",
-                            tc.name,
-                            truncate_json(&result, 200)
-                        );
-
-                        tool_results.push(ToolResult {
-                            tool_call_id: tc.id.clone(),
-                            name: tc.name.clone(),
-                            result,
-                        });
-                    }
-
-                    // Save text buffer if modified by tool calls
-                    if text_buffer.is_dirty() {
-                        if let Err(e) = text_buffer.save() {
-                            eprintln!("Warning: failed to save story file: {e}");
+                    SessionEvent::Usage {
+                        usage,
+                        context_estimate: _,
+                    } => {
+                        if usage.prompt_tokens > 0 || usage.completion_tokens > 0 {
+                            eprintln!(
+                                "[usage] {}K prompt / {}K completion tokens",
+                                usage.prompt_tokens / 1000,
+                                usage.completion_tokens / 1000,
+                            );
                         }
                     }
-
-                    // Add assistant message (with tool calls) to conversation
-                    messages.push(Message {
-                        role: Role::Assistant,
-                        content: response.content.unwrap_or_default(),
-                        tool_calls: Some(response.tool_calls),
-                        tool_results: None,
-                    });
-
-                    // Add tool results as a user message
-                    messages.push(Message {
-                        role: Role::User,
-                        content: String::new(),
-                        tool_calls: None,
-                        tool_results: Some(tool_results),
-                    });
-
-                    turn_count += 1;
-                }
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    break;
+                },
+            )
+            .await
+        {
+            Ok(turn) => println!("{}", turn.final_text),
+            Err(ChatTurnError::MaxToolTurnsReached) => {
+                println!("[Safety: max tool turns reached]");
+            }
+            Err(ChatTurnError::EmptyResponse) => {
+                eprintln!(
+                    "Error: LLM returned an empty response. This may indicate the context is too large for the model, a rate limit was hit, or the API returned an error."
+                );
+            }
+            Err(ChatTurnError::Provider {
+                source,
+                context_estimate,
+            }) => {
+                let err_str = source.to_string();
+                eprintln!("Error: {err_str}");
+                if err_str.contains("too large")
+                    || err_str.contains("context_length")
+                    || err_str.contains("maximum context")
+                    || err_str.contains("token")
+                    || err_str.contains("413")
+                    || err_str.contains("400")
+                {
+                    eprintln!(
+                        "Hint: estimated context was {}. The model may have a smaller context window.",
+                        context_estimate
+                    );
                 }
             }
-        }
-
-        // Print final response
-        if let Some(text) = &final_text {
-            println!("{text}");
-        }
-
-        // Update history with user message + final assistant response
-        history.push(Message {
-            role: Role::User,
-            content: input.to_string(),
-            tool_calls: None,
-            tool_results: None,
-        });
-
-        if let Some(text) = final_text {
-            history.push(Message {
-                role: Role::Assistant,
-                content: text,
-                tool_calls: None,
-                tool_results: None,
-            });
-        }
-
-        // Keep history manageable (last 20 messages)
-        if history.len() > 20 {
-            history.drain(..history.len() - 20);
         }
 
         // Persist any declaration changes (S6.3 sync)
@@ -303,7 +203,7 @@ pub async fn run(new_session: bool) -> anyhow::Result<()> {
     }
 
     // Persist chat history
-    if let Ok(json) = serde_json::to_string_pretty(&history) {
+    if let Ok(json) = serde_json::to_string_pretty(session.history()) {
         if let Err(e) = std::fs::write(&history_path, json) {
             eprintln!("Warning: failed to save chat history: {e}");
         }
@@ -318,13 +218,52 @@ pub async fn run(new_session: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn truncate_json(value: &serde_json::Value, max_len: usize) -> String {
-    let s = serde_json::to_string(value).unwrap_or_default();
-    if s.len() > max_len {
-        format!("{}...", &s[..max_len])
-    } else {
-        s
+async fn execute_chat_tool_calls(
+    tool_calls: &[ToolCall],
+    provider: &mut crate::concepts::provider::Provider,
+    skills: &mut crate::concepts::skills::Skills,
+    runtime: &mut ChatToolRuntime<'_>,
+) -> Vec<ToolResult> {
+    let mut tool_results = Vec::new();
+
+    for tc in tool_calls {
+        let mut ctx = SkillContext {
+            text_buffer: runtime.text_buffer,
+            scene_map: runtime.scene_map,
+            file_buffer_manager: runtime.file_buffer_manager.as_deref_mut(),
+            graph: runtime.graph,
+            intent: Some(runtime.intent),
+            perspectives: Some(runtime.perspectives),
+            manifest: runtime.manifest,
+            project_root: Some(runtime.project_root),
+            revision_brief: None,
+        };
+
+        let result = skills
+            .invoke(&tc.name, &tc.arguments, &mut ctx, Some(provider))
+            .await;
+
+        println!("[tool: {} -> {}]", tc.name, truncate_json(&result, 200));
+
+        tool_results.push(ToolResult {
+            tool_call_id: tc.id.clone(),
+            name: tc.name.clone(),
+            result,
+        });
     }
+
+    if let Some(fbm) = runtime.file_buffer_manager.as_deref_mut() {
+        if let Err(e) = fbm.save_dirty() {
+            eprintln!("Warning: failed to save story file(s): {e}");
+        }
+    }
+    if runtime.text_buffer.is_dirty() {
+        if let Err(e) = runtime.text_buffer.save() {
+            eprintln!("Warning: failed to save story file: {e}");
+        }
+    }
+
+    tool_results
 }
 
 #[cfg(test)]
@@ -335,13 +274,13 @@ mod tests {
     fn test_message_serialization_roundtrip() {
         let messages = vec![
             Message {
-                role: Role::User,
+                role: crate::concepts::provider::Role::User,
                 content: "Hello".to_string(),
                 tool_calls: None,
                 tool_results: None,
             },
             Message {
-                role: Role::Assistant,
+                role: crate::concepts::provider::Role::Assistant,
                 content: "Let me check.".to_string(),
                 tool_calls: Some(vec![crate::concepts::provider::ToolCall {
                     id: "tc_1".to_string(),
@@ -351,7 +290,7 @@ mod tests {
                 tool_results: None,
             },
             Message {
-                role: Role::User,
+                role: crate::concepts::provider::Role::User,
                 content: String::new(),
                 tool_calls: None,
                 tool_results: Some(vec![ToolResult {

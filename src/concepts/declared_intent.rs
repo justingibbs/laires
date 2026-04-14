@@ -66,6 +66,7 @@ impl DeclaredIntent {
     }
 
     /// Get a specific declaration
+    #[allow(dead_code)]
     pub fn get_declaration(&self, node_id: &str, field: &str) -> Option<&Declaration> {
         let key = DeclKey {
             node_id: node_id.to_string(),
@@ -84,11 +85,13 @@ impl DeclaredIntent {
     }
 
     /// Check if there are any declarations
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.declarations.is_empty()
     }
 
     /// Get the number of declarations
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.declarations.len()
     }
@@ -156,7 +159,12 @@ mod tests {
     #[test]
     fn test_declare_and_get() {
         let mut intent = DeclaredIntent::new();
-        intent.declare("node1", "description", "Revenge".to_string(), Some("Writer override".to_string()));
+        intent.declare(
+            "node1",
+            "description",
+            "Revenge".to_string(),
+            Some("Writer override".to_string()),
+        );
 
         let decl = intent.get_declaration("node1", "description").unwrap();
         assert_eq!(decl.value, "Revenge");
@@ -195,7 +203,12 @@ mod tests {
     #[test]
     fn test_save_load_roundtrip() {
         let mut intent = DeclaredIntent::new();
-        intent.declare("n1", "desc", "Value 1".to_string(), Some("Reason".to_string()));
+        intent.declare(
+            "n1",
+            "desc",
+            "Value 1".to_string(),
+            Some("Reason".to_string()),
+        );
         intent.declare("n2", "status", "Active".to_string(), None);
 
         let dir = std::env::temp_dir().join("laires_test_decl");

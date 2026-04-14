@@ -1,16 +1,19 @@
 use std::fs;
+use std::path::Path;
 
-use crate::config::{ProjectConfig, LAIRES_DIR};
+use crate::config::{LAIRES_DIR, ProjectConfig};
 
 pub fn run(title: &str, fountain: bool) -> anyhow::Result<()> {
     let project_dir = std::env::current_dir()?;
+    init_at(&project_dir, title, fountain)
+}
+
+/// Initialize a Laires project at the given directory.
+pub fn init_at(project_dir: &Path, title: &str, fountain: bool) -> anyhow::Result<()> {
     let laires_dir = project_dir.join(LAIRES_DIR);
 
     if laires_dir.exists() {
-        anyhow::bail!(
-            "Project already initialized at {}",
-            project_dir.display()
-        );
+        anyhow::bail!("Project already initialized at {}", project_dir.display());
     }
 
     // Create .laires/ directory structure
@@ -48,18 +51,17 @@ pub fn run(title: &str, fountain: bool) -> anyhow::Result<()> {
     // Create .gitignore for the .laires directory
     let gitignore_path = project_dir.join(".gitignore");
     if !gitignore_path.exists() {
-        fs::write(
-            &gitignore_path,
-            ".laires/cache/\n",
-        )?;
+        fs::write(&gitignore_path, ".laires/cache/\n.env\n")?;
     } else {
         // Append if .laires/cache/ isn't already in .gitignore
         let content = fs::read_to_string(&gitignore_path)?;
         if !content.contains(".laires/cache/") {
-            fs::write(
-                &gitignore_path,
-                format!("{content}\n.laires/cache/\n"),
-            )?;
+            fs::write(&gitignore_path, format!("{content}\n.laires/cache/\n"))?;
+        }
+        // Re-read in case we just appended above
+        let content = fs::read_to_string(&gitignore_path)?;
+        if !content.lines().any(|line| line.trim() == ".env") {
+            fs::write(&gitignore_path, format!("{content}\n.env\n"))?;
         }
     }
 
@@ -76,11 +78,7 @@ pub fn run(title: &str, fountain: bool) -> anyhow::Result<()> {
     let scenes_path = laires_dir.join("scenes.json");
     fs::write(
         &scenes_path,
-        serde_json::to_string_pretty(&serde_json::json!({
-            "scenes": [],
-            "parse_mode": if fountain { "Fountain" } else { "Prose" },
-            "pending_reindex": []
-        }))?,
+        serde_json::to_string_pretty(&crate::runtime::scene_cache::SceneCache::empty())?,
     )?;
 
     println!("Initialized Laires project: {title}");

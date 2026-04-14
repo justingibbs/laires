@@ -14,10 +14,7 @@ pub struct Divergence {
 
 /// Compare all declarations against current graph node fields.
 /// Returns divergences where inferred and declared values differ.
-pub fn detect_divergences(
-    graph: &NarrativeGraph,
-    intent: &DeclaredIntent,
-) -> Vec<Divergence> {
+pub fn detect_divergences(graph: &NarrativeGraph, intent: &DeclaredIntent) -> Vec<Divergence> {
     let mut divergences = Vec::new();
 
     for (key, decl) in intent.list_declarations() {
@@ -38,19 +35,15 @@ pub fn detect_divergences(
 }
 
 /// Find declarations that reference nodes no longer in the graph.
-pub fn detect_orphans(
-    graph: &NarrativeGraph,
-    intent: &DeclaredIntent,
-) -> Vec<DeclKey> {
-    let valid_ids: std::collections::HashSet<String> =
-        graph.all_node_ids().into_iter().collect();
+pub fn detect_orphans(graph: &NarrativeGraph, intent: &DeclaredIntent) -> Vec<DeclKey> {
+    let valid_ids: std::collections::HashSet<String> = graph.all_node_ids().into_iter().collect();
     intent.find_orphans(&valid_ids)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::concepts::narrative_graph::{new_id, GraphNode};
+    use crate::concepts::narrative_graph::{GraphNode, new_id};
 
     #[test]
     fn test_no_divergence_when_matching() {

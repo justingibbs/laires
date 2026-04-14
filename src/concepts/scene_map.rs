@@ -22,6 +22,8 @@ pub struct SceneSpan {
     pub end: usize,
     pub content_hash: String,
     pub title: Option<String>,
+    #[serde(default)]
+    pub file_path: String,
 }
 
 impl SceneSpan {
@@ -36,7 +38,7 @@ pub enum ParseMode {
     Fountain,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SceneMap {
     scenes: Vec<SceneSpan>,
     parse_mode: ParseMode,
@@ -56,7 +58,7 @@ impl SceneMap {
     }
 
     /// Rebuild all scene boundaries from scratch
-    pub fn full_reindex(&mut self, text: &str) {
+    pub fn full_reindex(&mut self, text: &str, file_path: &str) {
         let boundaries = match self.parse_mode {
             ParseMode::Prose => detect_prose_boundaries(text),
             ParseMode::Fountain => detect_fountain_boundaries(text),
@@ -75,6 +77,7 @@ impl SceneMap {
                 end: text.len(),
                 content_hash: hash,
                 title: None,
+                file_path: file_path.to_string(),
             });
             self.pending_reindex.insert(id);
             return;
@@ -123,6 +126,7 @@ impl SceneMap {
                 end: *end,
                 content_hash: hash,
                 title: title.clone(),
+                file_path: file_path.to_string(),
             });
             self.pending_reindex.insert(id);
         }
@@ -137,6 +141,7 @@ impl SceneMap {
                 end: text.len(),
                 content_hash: hash,
                 title: None,
+                file_path: file_path.to_string(),
             });
             self.pending_reindex.insert(id);
         }
@@ -162,7 +167,11 @@ impl SceneMap {
             let character_name = name_match.as_str().trim().to_string();
 
             // Find which scene this cue belongs to
-            if let Some(scene) = self.scenes.iter().find(|s| s.start <= byte_offset && byte_offset < s.end) {
+            if let Some(scene) = self
+                .scenes
+                .iter()
+                .find(|s| s.start <= byte_offset && byte_offset < s.end)
+            {
                 self.character_cues.push(CharacterCue {
                     character_name,
                     scene_id: scene.id.clone(),
@@ -178,7 +187,8 @@ impl SceneMap {
     }
 
     /// Incrementally update scene boundaries affected by changes
-    pub fn reindex(&mut self, text: &str, changed_ranges: &[ByteRange]) {
+    #[allow(dead_code)]
+    pub fn reindex(&mut self, text: &str, file_path: &str, changed_ranges: &[ByteRange]) {
         // For simplicity in Phase 1, do a full reindex but preserve scene IDs
         // where content hasn't changed
         let old_scenes: Vec<SceneSpan> = self.scenes.clone();
@@ -187,7 +197,7 @@ impl SceneMap {
             .map(|s| (s.id.clone(), s.content_hash.clone()))
             .collect();
 
-        self.full_reindex(text);
+        self.full_reindex(text, file_path);
 
         // Try to preserve scene IDs for scenes whose content hasn't changed
         // (matching by position and hash)
@@ -220,6 +230,7 @@ impl SceneMap {
     }
 
     /// Get the scene containing a byte offset
+    #[allow(dead_code)]
     pub fn get_scene_at(&self, offset: usize) -> Option<&SceneSpan> {
         self.scenes
             .iter()
@@ -247,6 +258,7 @@ impl SceneMap {
     }
 
     /// Save scene map to disk
+    #[allow(dead_code)]
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
         let json = serde_json::to_string_pretty(self)?;
         std::fs::write(path, json)?;
@@ -254,6 +266,7 @@ impl SceneMap {
     }
 
     /// Load scene map from disk
+    #[allow(dead_code)]
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
         let map: SceneMap = serde_json::from_str(&content)?;
@@ -281,15 +294,13 @@ fn detect_prose_boundaries(text: &str) -> Vec<SceneBoundary> {
     let mut boundaries = Vec::new();
 
     // Pattern 1: Horizontal rules (---, ***, ___)
-    let hr_re =
-        Regex::new(r"(?m)^[ \t]*(-{3,}|\*{3,}|_{3,})[ \t]*$").unwrap();
+    let hr_re = Regex::new(r"(?m)^[ \t]*(-{3,}|\*{3,}|_{3,})[ \t]*$").unwrap();
 
     // Pattern 2: Markdown headings (## Chapter 3, ### Scene 2)
     let heading_re = Regex::new(r"(?m)^(#{1,6})\s+(.+)$").unwrap();
 
     // Pattern 3: HTML comment markers <!-- scene: "title" -->
-    let comment_re =
-        Regex::new(r#"(?m)<!--\s*scene:\s*"([^"]+)"\s*-->"#).unwrap();
+    let comment_re = Regex::new(r#"(?m)<!--\s*scene:\s*"([^"]+)"\s*-->"#).unwrap();
 
     // Collect all boundaries with their byte offsets
     for m in hr_re.find_iter(text) {
@@ -349,9 +360,7 @@ fn detect_fountain_boundaries(text: &str) -> Vec<SceneBoundary> {
     let mut boundaries = Vec::new();
 
     // Fountain scene headings: INT. or EXT. (or INT./EXT., I/E, etc.)
-    let scene_re =
-        Regex::new(r"(?mi)^(INT\.|EXT\.|INT\./EXT\.|I/E\.|EST\.)[\t ]+(.+)$")
-            .unwrap();
+    let scene_re = Regex::new(r"(?mi)^(INT\.|EXT\.|INT\./EXT\.|I/E\.|EST\.)[\t ]+(.+)$").unwrap();
 
     for caps in scene_re.captures_iter(text) {
         let m = caps.get(0).unwrap();
@@ -382,7 +391,7 @@ mod tests {
     #[test]
     fn test_prose_single_scene() {
         let mut map = SceneMap::new(ParseMode::Prose);
-        map.full_reindex("Just a simple story with no breaks.");
+        map.full_reindex("Just a simple story with no breaks.", "");
         assert_eq!(map.scene_count(), 1);
         assert_eq!(map.scenes[0].start, 0);
     }
@@ -391,16 +400,10 @@ mod tests {
     fn test_prose_heading_boundaries() {
         let text = "## Chapter 1\n\nSome text here, enough words to count as real content for the scene.\n\n## Chapter 2\n\nMore text here, also enough words to count as real content.";
         let mut map = SceneMap::new(ParseMode::Prose);
-        map.full_reindex(text);
+        map.full_reindex(text, "");
         assert_eq!(map.scene_count(), 2);
-        assert_eq!(
-            map.scenes[0].title.as_deref(),
-            Some("Chapter 1")
-        );
-        assert_eq!(
-            map.scenes[1].title.as_deref(),
-            Some("Chapter 2")
-        );
+        assert_eq!(map.scenes[0].title.as_deref(), Some("Chapter 1"));
+        assert_eq!(map.scenes[1].title.as_deref(), Some("Chapter 2"));
     }
 
     #[test]
@@ -408,7 +411,7 @@ mod tests {
         // HR followed by heading should produce ONE scene, not two
         let text = "First scene with enough words to be a real scene here.\n\n---\n\n## Part Two\n\nSecond scene also with enough words to count as real.";
         let mut map = SceneMap::new(ParseMode::Prose);
-        map.full_reindex(text);
+        map.full_reindex(text, "");
         assert_eq!(map.scene_count(), 2);
         assert_eq!(map.scenes[1].title.as_deref(), Some("Part Two"));
     }
@@ -417,7 +420,7 @@ mod tests {
     fn test_prose_comment_markers() {
         let text = "Intro text with enough words to be a real scene definitely.\n\n<!-- scene: \"The Arrival\" -->\n\nScene text with enough words to also be real content here.";
         let mut map = SceneMap::new(ParseMode::Prose);
-        map.full_reindex(text);
+        map.full_reindex(text, "");
         assert!(map.scene_count() >= 2);
     }
 
@@ -425,7 +428,7 @@ mod tests {
     fn test_fountain_scene_headings() {
         let text = "INT. COFFEE SHOP - DAY\n\nDialogue here with enough words to fill a scene properly.\n\nEXT. PARKING LOT - NIGHT\n\nMore text here also enough words to be a scene.";
         let mut map = SceneMap::new(ParseMode::Fountain);
-        map.full_reindex(text);
+        map.full_reindex(text, "");
         assert_eq!(map.scene_count(), 2);
     }
 
@@ -447,7 +450,7 @@ Every city has a shadow. Sydney shadow had a name: Victor Kovac. Maguire had nev
 ---\n\n\
 *Author's Note: This story is fiction.*";
         let mut map = SceneMap::new(ParseMode::Prose);
-        map.full_reindex(text);
+        map.full_reindex(text, "");
         // Should be ~4-5 scenes (the 3 parts + maybe title preamble + author's note),
         // NOT 10+ scenes from separate HR and heading boundaries
         assert!(
@@ -456,10 +459,11 @@ Every city has a shadow. Sydney shadow had a name: Victor Kovac. Maguire had nev
             map.scene_count()
         );
         // The parts should have their titles
-        let titles: Vec<Option<&str>> =
-            map.scenes.iter().map(|s| s.title.as_deref()).collect();
+        let titles: Vec<Option<&str>> = map.scenes.iter().map(|s| s.title.as_deref()).collect();
         assert!(
-            titles.iter().any(|t| t == &Some("Part One: Smoke and Mirrors")),
+            titles
+                .iter()
+                .any(|t| t == &Some("Part One: Smoke and Mirrors")),
             "Missing Part One title in {titles:?}"
         );
     }
@@ -468,7 +472,7 @@ Every city has a shadow. Sydney shadow had a name: Victor Kovac. Maguire had nev
     fn test_get_scene_at_offset() {
         let text = "## Scene 1\n\nFirst text with enough words to be a real scene content.\n\n## Scene 2\n\nSecond text with enough words to be a real scene content.";
         let mut map = SceneMap::new(ParseMode::Prose);
-        map.full_reindex(text);
+        map.full_reindex(text, "");
 
         let scene = map.get_scene_at(0).unwrap();
         assert_eq!(scene.title.as_deref(), Some("Scene 1"));
@@ -481,7 +485,7 @@ Every city has a shadow. Sydney shadow had a name: Victor Kovac. Maguire had nev
     fn test_all_scenes_pending_after_full_reindex() {
         let text = "## Scene 1\n\nText enough words to be real scene content here.\n\n## Scene 2\n\nText enough words to be real scene content here.";
         let mut map = SceneMap::new(ParseMode::Prose);
-        map.full_reindex(text);
+        map.full_reindex(text, "");
         assert_eq!(map.get_pending().len(), map.scene_count());
     }
 
@@ -489,7 +493,7 @@ Every city has a shadow. Sydney shadow had a name: Victor Kovac. Maguire had nev
     fn test_mark_analyzed() {
         let text = "## Scene 1\n\nText enough words to be real scene content here.";
         let mut map = SceneMap::new(ParseMode::Prose);
-        map.full_reindex(text);
+        map.full_reindex(text, "");
 
         let id = map.scenes[0].id.clone();
         map.mark_analyzed(&id);
@@ -500,7 +504,7 @@ Every city has a shadow. Sydney shadow had a name: Victor Kovac. Maguire had nev
     fn test_fountain_character_cue_detection() {
         let text = "INT. COFFEE SHOP - DAY\n\nSome establishing action with enough words to count as real.\n\nMARCUS\nHello there, how are you doing today?\n\nELENA\nI'm doing just fine, thank you very much.\n";
         let mut map = SceneMap::new(ParseMode::Fountain);
-        map.full_reindex(text);
+        map.full_reindex(text, "");
 
         let cues = map.character_cues();
         let names: Vec<&str> = cues.iter().map(|c| c.character_name.as_str()).collect();
@@ -512,7 +516,7 @@ Every city has a shadow. Sydney shadow had a name: Victor Kovac. Maguire had nev
     fn test_fountain_cue_with_parenthetical() {
         let text = "INT. OFFICE - NIGHT\n\nSome establishing action with enough words to count as real.\n\nMARCUS (V.O.)\nI remember that day clearly, it was something.\n\nELENA (CONT'D)\nAnd then what happened after all that?\n";
         let mut map = SceneMap::new(ParseMode::Fountain);
-        map.full_reindex(text);
+        map.full_reindex(text, "");
 
         let cues = map.character_cues();
         let names: Vec<&str> = cues.iter().map(|c| c.character_name.as_str()).collect();
@@ -524,7 +528,7 @@ Every city has a shadow. Sydney shadow had a name: Victor Kovac. Maguire had nev
     fn test_fountain_cue_to_scene_assignment() {
         let text = "INT. COFFEE SHOP - DAY\n\nSome establishing action with enough words for scene one content.\n\nMARCUS\nHello there, a line of dialogue for the scene.\n\nEXT. PARKING LOT - NIGHT\n\nMore establishing text with enough words for scene two content.\n\nELENA\nGoodbye, another line of dialogue for scene two.\n";
         let mut map = SceneMap::new(ParseMode::Fountain);
-        map.full_reindex(text);
+        map.full_reindex(text, "");
 
         assert_eq!(map.scene_count(), 2);
         let cues = map.character_cues();
@@ -540,5 +544,32 @@ Every city has a shadow. Sydney shadow had a name: Victor Kovac. Maguire had nev
         let scene2_id = &map.list_scenes()[1].id;
         assert_eq!(&marcus_cue.unwrap().scene_id, scene1_id);
         assert_eq!(&elena_cue.unwrap().scene_id, scene2_id);
+    }
+
+    #[test]
+    fn test_file_path_set_after_reindex() {
+        let text = "## Scene 1\n\nText enough words to be real scene content here.";
+        let mut map = SceneMap::new(ParseMode::Prose);
+        map.full_reindex(text, "chapter-1.md");
+        assert_eq!(map.scenes[0].file_path, "chapter-1.md");
+    }
+
+    #[test]
+    fn test_file_path_serde_default_compat() {
+        // Simulate loading old JSON without file_path field
+        let json = r#"{
+            "scenes": [{
+                "id": "test-id",
+                "start": 0,
+                "end": 10,
+                "content_hash": "abc",
+                "title": null
+            }],
+            "parse_mode": "Prose",
+            "pending_reindex": [],
+            "character_cues": []
+        }"#;
+        let map: SceneMap = serde_json::from_str(json).unwrap();
+        assert_eq!(map.scenes[0].file_path, "");
     }
 }

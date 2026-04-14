@@ -6,8 +6,9 @@ use std::path::Path;
 
 use crate::concepts::narrative_graph::{CharacterId, GraphNode, NarrativeGraph};
 use crate::concepts::provider::{Message, Provider, Role};
-use crate::concepts::scene_map::{SceneId, SceneMap};
-use crate::concepts::text_buffer::TextBuffer;
+use crate::concepts::scene_map::SceneId;
+
+const BLIND_SPOT_BATCH_SIZE: usize = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Perspective {
@@ -79,6 +80,7 @@ impl CharacterPerspective {
     }
 
     /// Get a cached perspective for a character
+    #[allow(dead_code)]
     pub fn get_perspective(&self, character_id: &str) -> Option<&Perspective> {
         self.perspectives.get(character_id)
     }
@@ -106,6 +108,7 @@ impl CharacterPerspective {
     }
 
     /// Invalidate all cached perspectives for a character
+    #[allow(dead_code)]
     pub fn invalidate(&mut self, character_id: &str) {
         self.perspectives.remove(character_id);
         self.scene_perspectives
@@ -113,6 +116,7 @@ impl CharacterPerspective {
     }
 
     /// Invalidate a specific scene perspective
+    #[allow(dead_code)]
     pub fn invalidate_scene(&mut self, character_id: &str, scene_id: &str) {
         self.scene_perspectives
             .remove(&(character_id.to_string(), scene_id.to_string()));
@@ -125,9 +129,7 @@ impl CharacterPerspective {
             scene_perspectives: self
                 .scene_perspectives
                 .iter()
-                .map(|((cid, sid), sp)| {
-                    (format!("{cid}::{sid}"), sp.clone())
-                })
+                .map(|((cid, sid), sp)| (format!("{cid}::{sid}"), sp.clone()))
                 .collect(),
         };
         let json = serde_json::to_string_pretty(&wrapper)?;
@@ -193,8 +195,6 @@ impl CharacterPerspective {
         &mut self,
         character_id: &str,
         graph: &NarrativeGraph,
-        text_buffer: &TextBuffer,
-        scene_map: &SceneMap,
         provider: &mut Provider,
     ) -> Result<Perspective, crate::error::LairesError> {
         let knowledge_boundary = Self::compute_knowledge_boundary(graph, character_id);
@@ -211,15 +211,12 @@ impl CharacterPerspective {
             })
             .unwrap_or_else(|| character_id.to_string());
 
-        // Gather scene texts the character is present in
+        // Use scene summaries from the graph instead of full text
         let mut scene_texts = Vec::new();
         for scene_id in &knowledge_boundary {
-            if let Some(scene_span) = scene_map.get_scene(scene_id) {
-                let text = text_buffer
-                    .read(scene_span.byte_range())
-                    .unwrap_or_default();
-                let title = scene_span.title.as_deref().unwrap_or("(untitled)");
-                scene_texts.push(format!("Scene \"{title}\" ({scene_id}):\n{text}"));
+            if let Some(GraphNode::Scene { title, summary, .. }) = graph.get_node(scene_id) {
+                let title = title.as_deref().unwrap_or("(untitled)");
+                scene_texts.push(format!("Scene \"{title}\" ({scene_id}):\n{summary}"));
             }
         }
 
@@ -248,8 +245,8 @@ impl CharacterPerspective {
 
         let response = provider.complete(&messages, &[], Some(system)).await?;
         let raw = response.content.unwrap_or_default();
-        let parsed = crate::concepts::analysis::extract_json(&raw)
-            .unwrap_or_else(|| serde_json::json!({}));
+        let parsed =
+            crate::concepts::analysis::extract_json(&raw).unwrap_or_else(|| serde_json::json!({}));
 
         let filtered_arc = parsed["filtered_arc"]
             .as_array()
@@ -339,8 +336,8 @@ impl CharacterPerspective {
 
         let response = provider.complete(&messages, &[], Some(system)).await?;
         let raw = response.content.unwrap_or_default();
-        let parsed = crate::concepts::analysis::extract_json(&raw)
-            .unwrap_or_else(|| serde_json::json!({}));
+        let parsed =
+            crate::concepts::analysis::extract_json(&raw).unwrap_or_else(|| serde_json::json!({}));
 
         let sp = ScenePerspective {
             character_id: character_id.to_string(),
@@ -349,10 +346,7 @@ impl CharacterPerspective {
             perceives: parsed["perceives"].as_str().unwrap_or("").to_string(),
             decides: parsed["decides"].as_str().unwrap_or("").to_string(),
             blocked_by: parsed["blocked_by"].as_str().map(String::from),
-            emotional_state: parsed["emotional_state"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
+            emotional_state: parsed["emotional_state"].as_str().unwrap_or("").to_string(),
             knowledge_gained: parsed["knowledge_gained"]
                 .as_array()
                 .map(|a| {
@@ -361,9 +355,7 @@ impl CharacterPerspective {
                         .collect()
                 })
                 .unwrap_or_default(),
-            content_hash: blake3::hash(scene_text.as_bytes())
-                .to_hex()
-                .to_string(),
+            content_hash: blake3::hash(scene_text.as_bytes()).to_hex().to_string(),
         };
 
         self.store_scene_perspective(sp.clone());
@@ -416,8 +408,8 @@ impl CharacterPerspective {
             .complete(&messages, &[], Some("You are a narrative analysis engine."))
             .await?;
         let raw = response.content.unwrap_or_default();
-        let parsed = crate::concepts::analysis::extract_json(&raw)
-            .unwrap_or_else(|| serde_json::json!({}));
+        let parsed =
+            crate::concepts::analysis::extract_json(&raw).unwrap_or_else(|| serde_json::json!({}));
 
         let divergences = parsed["divergences"]
             .as_array()
@@ -443,8 +435,6 @@ impl CharacterPerspective {
         &mut self,
         character_id: &str,
         graph: &NarrativeGraph,
-        text_buffer: &TextBuffer,
-        scene_map: &SceneMap,
         provider: &mut Provider,
     ) -> Result<Vec<BlindSpot>, crate::error::LairesError> {
         let knowledge_boundary = Self::compute_knowledge_boundary(graph, character_id);
@@ -460,27 +450,23 @@ impl CharacterPerspective {
             })
             .unwrap_or_else(|| character_id.to_string());
 
-        // Collect scenes the character is NOT present in
+        // Collect scene summaries for scenes the character is NOT present in
         let mut unseen_scenes = Vec::new();
         for scene_node in graph.get_scenes() {
             if let GraphNode::Scene {
                 id,
                 characters_present,
                 title,
+                summary,
                 ..
             } = scene_node
             {
                 if !characters_present.contains(&character_id.to_string()) {
-                    if let Some(span) = scene_map.get_scene(id) {
-                        let text = text_buffer
-                            .read(span.byte_range())
-                            .unwrap_or_default();
-                        let title_str = title.as_deref().unwrap_or("(untitled)");
-                        unseen_scenes.push(format!(
-                            "Scene \"{title_str}\" ({id}) [present: {}]:\n{text}",
-                            characters_present.join(", ")
-                        ));
-                    }
+                    let title_str = title.as_deref().unwrap_or("(untitled)");
+                    unseen_scenes.push(format!(
+                        "Scene \"{title_str}\" ({id}) [present: {}]:\n{summary}",
+                        characters_present.join(", ")
+                    ));
                 }
             }
         }
@@ -489,60 +475,66 @@ impl CharacterPerspective {
             return Ok(vec![]);
         }
 
-        let prompt = format!(
-            "Identify dramatic irony / blind spots for \"{char_name}\" (ID: {character_id}).\n\n\
-             This character is present in scenes: {:?}\n\n\
-             These are scenes they did NOT witness:\n{}\n\n\
-             For each piece of important information in the unseen scenes that {char_name} \
-             does not know about, respond with JSON:\n\
-             ```json\n{{ \"blind_spots\": [\n\
-               {{ \"scene_id\": \"...\", \"information\": \"what they don't know\", \
-                  \"known_by\": [\"character_ids who do know\"] }}\n\
-             ] }}\n```",
-            knowledge_boundary,
-            unseen_scenes.join("\n\n---\n\n"),
-        );
+        // Process unseen scenes in batches to avoid exceeding context limits
+        let mut blind_spots = Vec::new();
+        for batch in unseen_scenes.chunks(BLIND_SPOT_BATCH_SIZE) {
+            let prompt = format!(
+                "Identify dramatic irony / blind spots for \"{char_name}\" (ID: {character_id}).\n\n\
+                 This character is present in scenes: {:?}\n\n\
+                 These are scenes they did NOT witness:\n{}\n\n\
+                 For each piece of important information in the unseen scenes that {char_name} \
+                 does not know about, respond with JSON:\n\
+                 ```json\n{{ \"blind_spots\": [\n\
+                   {{ \"scene_id\": \"...\", \"information\": \"what they don't know\", \
+                      \"known_by\": [\"character_ids who do know\"] }}\n\
+                 ] }}\n```",
+                knowledge_boundary,
+                batch.join("\n\n---\n\n"),
+            );
 
-        let messages = vec![Message {
-            role: Role::User,
-            content: prompt,
-            tool_calls: None,
-            tool_results: None,
-        }];
+            let messages = vec![Message {
+                role: Role::User,
+                content: prompt,
+                tool_calls: None,
+                tool_results: None,
+            }];
 
-        let response = provider
-            .complete(
-                &messages,
-                &[],
-                Some("You are a narrative analysis engine. Identify dramatic irony."),
-            )
-            .await?;
-        let raw = response.content.unwrap_or_default();
-        let parsed = crate::concepts::analysis::extract_json(&raw)
-            .unwrap_or_else(|| serde_json::json!({}));
+            let response = provider
+                .complete(
+                    &messages,
+                    &[],
+                    Some("You are a narrative analysis engine. Identify dramatic irony."),
+                )
+                .await?;
+            let raw = response.content.unwrap_or_default();
+            let parsed = crate::concepts::analysis::extract_json(&raw)
+                .unwrap_or_else(|| serde_json::json!({}));
 
-        let blind_spots = parsed["blind_spots"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|b| {
-                        Some(BlindSpot {
-                            character_id: character_id.to_string(),
-                            scene_id: b["scene_id"].as_str()?.to_string(),
-                            information: b["information"].as_str()?.to_string(),
-                            known_by: b["known_by"]
-                                .as_array()
-                                .map(|a| {
-                                    a.iter()
-                                        .filter_map(|v| v.as_str().map(String::from))
-                                        .collect()
-                                })
-                                .unwrap_or_default(),
+            let batch_spots: Vec<BlindSpot> = parsed["blind_spots"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|b| {
+                            Some(BlindSpot {
+                                character_id: character_id.to_string(),
+                                scene_id: b["scene_id"].as_str()?.to_string(),
+                                information: b["information"].as_str()?.to_string(),
+                                known_by: b["known_by"]
+                                    .as_array()
+                                    .map(|a| {
+                                        a.iter()
+                                            .filter_map(|v| v.as_str().map(String::from))
+                                            .collect()
+                                    })
+                                    .unwrap_or_default(),
+                            })
                         })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            blind_spots.extend(batch_spots);
+        }
 
         Ok(blind_spots)
     }
@@ -594,6 +586,7 @@ mod tests {
             characters_present: vec![char_a.clone(), char_b.clone()],
             location: None,
             time: None,
+            file_path: String::new(),
         });
 
         g.add_node(GraphNode::Scene {
@@ -603,6 +596,7 @@ mod tests {
             characters_present: vec![char_b.clone()],
             location: None,
             time: None,
+            file_path: String::new(),
         });
 
         g.add_edge(&char_a, &scene_1, GraphEdge::PresentIn);
@@ -790,5 +784,86 @@ mod tests {
         cp.invalidate_by_graph_hash("current_hash");
         assert!(cp.get_perspective("char_a").is_none());
         assert!(cp.get_perspective("char_b").is_some());
+    }
+
+    #[test]
+    fn test_blind_spot_batch_size_constant() {
+        assert_eq!(BLIND_SPOT_BATCH_SIZE, 5);
+    }
+
+    #[test]
+    fn test_blind_spot_batching_logic() {
+        // Verify chunks() produces expected batch counts
+        let scenes: Vec<String> = (0..12).map(|i| format!("scene_{i}")).collect();
+        let batches: Vec<&[String]> = scenes.chunks(BLIND_SPOT_BATCH_SIZE).collect();
+        assert_eq!(batches.len(), 3); // 5 + 5 + 2
+        assert_eq!(batches[0].len(), 5);
+        assert_eq!(batches[1].len(), 5);
+        assert_eq!(batches[2].len(), 2);
+
+        // Exact multiple
+        let scenes: Vec<String> = (0..10).map(|i| format!("scene_{i}")).collect();
+        let batches: Vec<&[String]> = scenes.chunks(BLIND_SPOT_BATCH_SIZE).collect();
+        assert_eq!(batches.len(), 2);
+
+        // Fewer than batch size
+        let scenes: Vec<String> = (0..3).map(|i| format!("scene_{i}")).collect();
+        let batches: Vec<&[String]> = scenes.chunks(BLIND_SPOT_BATCH_SIZE).collect();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].len(), 3);
+    }
+
+    #[test]
+    fn test_scene_summary_used_for_perspective() {
+        // Verify the graph's scene summary is accessible for perspective generation
+        let g = make_test_graph();
+        let kb = CharacterPerspective::compute_knowledge_boundary(&g, "char_a");
+
+        let mut scene_texts = Vec::new();
+        for scene_id in &kb {
+            if let Some(GraphNode::Scene { title, summary, .. }) = g.get_node(scene_id) {
+                let title = title.as_deref().unwrap_or("(untitled)");
+                scene_texts.push(format!("Scene \"{title}\" ({scene_id}):\n{summary}"));
+            }
+        }
+
+        assert_eq!(scene_texts.len(), 1);
+        assert!(scene_texts[0].contains("Scene \"Scene 1\""));
+        assert!(scene_texts[0].contains("Both present."));
+    }
+
+    #[test]
+    fn test_unseen_scenes_use_graph_summaries() {
+        // Verify unseen scenes are collected from graph nodes with summaries
+        let g = make_test_graph();
+        let character_id = "char_a";
+        let knowledge_boundary = CharacterPerspective::compute_knowledge_boundary(&g, character_id);
+
+        let mut unseen_scenes = Vec::new();
+        for scene_node in g.get_scenes() {
+            if let GraphNode::Scene {
+                id,
+                characters_present,
+                title,
+                summary,
+                ..
+            } = scene_node
+            {
+                if !characters_present.contains(&character_id.to_string()) {
+                    let title_str = title.as_deref().unwrap_or("(untitled)");
+                    unseen_scenes.push(format!(
+                        "Scene \"{title_str}\" ({id}) [present: {}]:\n{summary}",
+                        characters_present.join(", ")
+                    ));
+                }
+            }
+        }
+
+        // char_a is only in scene_1, so scene_2 should be unseen
+        assert_eq!(unseen_scenes.len(), 1);
+        assert!(unseen_scenes[0].contains("Scene \"Scene 2\""));
+        assert!(unseen_scenes[0].contains("Only Elena."));
+        assert!(unseen_scenes[0].contains("[present: char_b]"));
+        assert!(!knowledge_boundary.contains("scene_2"));
     }
 }

@@ -3,7 +3,7 @@ use crate::concepts::narrative_graph::{GraphNode, NarrativeGraph};
 use crate::concepts::provider::Provider;
 use crate::concepts::scene_map::{ParseMode, SceneMap};
 use crate::concepts::text_buffer::TextBuffer;
-use crate::config::{self, ProjectConfig, LAIRES_DIR};
+use crate::config::{self, LAIRES_DIR, ProjectConfig};
 
 pub async fn run(
     character: &str,
@@ -30,7 +30,7 @@ pub async fn run(
         _ => ParseMode::Prose,
     };
     let mut scene_map = SceneMap::new(parse_mode);
-    scene_map.full_reindex(&full_text);
+    scene_map.full_reindex(&full_text, "");
 
     let graph_path = project_root.join(LAIRES_DIR).join("graph.json");
     let graph = if graph_path.exists() {
@@ -81,13 +81,19 @@ pub async fn run(
         if json_output {
             println!("{}", serde_json::to_string_pretty(&result)?);
         } else {
-            println!("Scene: {}", scene_span.title.as_deref().unwrap_or("(untitled)"));
+            println!(
+                "Scene: {}",
+                scene_span.title.as_deref().unwrap_or("(untitled)")
+            );
             println!();
             println!("--- {} ---", character);
             println!("  Wants: {}", result.perspective_a.wants);
             println!("  Perceives: {}", result.perspective_a.perceives);
             println!("  Decides: {}", result.perspective_a.decides);
-            println!("  Emotional state: {}", result.perspective_a.emotional_state);
+            println!(
+                "  Emotional state: {}",
+                result.perspective_a.emotional_state
+            );
             if let Some(ref blocked) = result.perspective_a.blocked_by {
                 println!("  Blocked by: {blocked}");
             }
@@ -96,7 +102,10 @@ pub async fn run(
             println!("  Wants: {}", result.perspective_b.wants);
             println!("  Perceives: {}", result.perspective_b.perceives);
             println!("  Decides: {}", result.perspective_b.decides);
-            println!("  Emotional state: {}", result.perspective_b.emotional_state);
+            println!(
+                "  Emotional state: {}",
+                result.perspective_b.emotional_state
+            );
             if let Some(ref blocked) = result.perspective_b.blocked_by {
                 println!("  Blocked by: {blocked}");
             }
@@ -139,7 +148,10 @@ pub async fn run(
         if json_output {
             println!("{}", serde_json::to_string_pretty(&sp)?);
         } else {
-            println!("Scene: {}", scene_span.title.as_deref().unwrap_or("(untitled)"));
+            println!(
+                "Scene: {}",
+                scene_span.title.as_deref().unwrap_or("(untitled)")
+            );
             println!("  Wants: {}", sp.wants);
             println!("  Perceives: {}", sp.perceives);
             println!("  Decides: {}", sp.decides);
@@ -159,7 +171,7 @@ pub async fn run(
         println!("Generating full perspective for {}...\n", character);
 
         let perspective = perspectives
-            .generate_perspective(&char_id, &graph, &text_buffer, &scene_map, &mut provider)
+            .generate_perspective(&char_id, &graph, &mut provider)
             .await?;
 
         if json_output {
@@ -200,10 +212,7 @@ fn find_char_id(graph: &NarrativeGraph, name: &str) -> anyhow::Result<String> {
         .get_characters()
         .iter()
         .find_map(|c| {
-            if let GraphNode::Character {
-                id, name: n, ..
-            } = c
-            {
+            if let GraphNode::Character { id, name: n, .. } = c {
                 if n.eq_ignore_ascii_case(name) {
                     Some(id.clone())
                 } else {

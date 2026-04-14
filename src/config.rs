@@ -8,8 +8,11 @@ pub const SCENES_FILE: &str = "scenes.json";
 pub const OVERRIDES_FILE: &str = "overrides.json";
 pub const PERSPECTIVES_CACHE_DIR: &str = "cache/perspectives";
 pub const CHAT_HISTORY_FILE: &str = "chat_history.json";
+pub const MANIFEST_FILE: &str = "manifest.toml";
+pub const SKILL_LOG_FILE: &str = "skill_log.jsonl";
+pub const BRIEFS_DIR: &str = "briefs";
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
     pub llm: LlmConfig,
     pub project: ProjectMeta,
@@ -17,9 +20,11 @@ pub struct ProjectConfig {
     pub analysis: AnalysisConfig,
     #[serde(default)]
     pub privacy: PrivacyConfig,
+    #[serde(default)]
+    pub classification: ClassificationConfig,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
     pub provider: String,
     pub model: String,
@@ -29,18 +34,22 @@ pub struct LlmConfig {
     pub base_url: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectMeta {
     pub title: String,
     #[serde(default = "default_format")]
     pub format: String,
+    /// Default session mode: "consultant" or "workshop".
+    /// If unset, inferred from file types in the manifest.
+    #[serde(default)]
+    pub default_mode: Option<String>,
 }
 
 fn default_format() -> String {
     "prose".to_string()
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisConfig {
     #[serde(default = "default_debounce")]
     pub debounce_ms: u64,
@@ -65,10 +74,28 @@ impl Default for AnalysisConfig {
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PrivacyConfig {
     #[serde(default)]
     pub restricted_when_cloud: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassificationConfig {
+    #[serde(default = "default_classification_model")]
+    pub model: String,
+}
+
+fn default_classification_model() -> String {
+    String::new() // empty = use the project's main LLM model
+}
+
+impl Default for ClassificationConfig {
+    fn default() -> Self {
+        Self {
+            model: default_classification_model(),
+        }
+    }
 }
 
 impl ProjectConfig {
@@ -93,17 +120,92 @@ impl ProjectConfig {
                 model: "gemini-2.5-flash".to_string(),
                 api_key_env: Some("GEMINI_API_KEY".to_string()),
                 base_url: Some(
-                    "https://generativelanguage.googleapis.com/v1beta/openai"
-                        .to_string(),
+                    "https://generativelanguage.googleapis.com/v1beta/openai".to_string(),
                 ),
             },
             project: ProjectMeta {
                 title: title.to_string(),
                 format: "prose".to_string(),
+                default_mode: None,
             },
             analysis: AnalysisConfig::default(),
             privacy: PrivacyConfig::default(),
+            classification: ClassificationConfig::default(),
         }
+    }
+}
+
+/// Write or update a KEY=VALUE line in a `.env` file.
+/// Creates the file if it doesn't exist. Updates the value if the key already exists.
+pub fn write_env_file(env_path: &Path, key: &str, value: &str) -> anyhow::Result<()> {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    let new_line = format!("{key}=\"{escaped}\"");
+
+    if env_path.exists() {
+        let content = std::fs::read_to_string(env_path)?;
+        let prefix = format!("{key}=");
+        let mut found = false;
+        let mut lines: Vec<String> = content
+            .lines()
+            .map(|line| {
+                if line.starts_with(&prefix) {
+                    found = true;
+                    new_line.clone()
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect();
+        if !found {
+            lines.push(new_line);
+        }
+        std::fs::write(env_path, lines.join("\n") + "\n")?;
+    } else {
+        std::fs::write(env_path, format!("{new_line}\n"))?;
+    }
+    Ok(())
+}
+
+/// Ensure `.env` is listed in `.gitignore`. Appends it if missing.
+pub fn ensure_gitignore_has_dotenv(project_root: &Path) -> anyhow::Result<()> {
+    let gitignore_path = project_root.join(".gitignore");
+    if gitignore_path.exists() {
+        let content = std::fs::read_to_string(&gitignore_path)?;
+        if !content.lines().any(|line| line.trim() == ".env") {
+            std::fs::write(&gitignore_path, format!("{content}\n.env\n"))?;
+        }
+    } else {
+        std::fs::write(&gitignore_path, ".env\n")?;
+    }
+    Ok(())
+}
+
+/// Return the global Laires config directory (`~/.config/laires/` on macOS/Linux).
+/// Creates the directory if it doesn't exist.
+pub fn global_config_dir() -> Option<PathBuf> {
+    let dir = dirs::config_dir()?.join("laires");
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir).ok()?;
+    }
+    Some(dir)
+}
+
+/// Return the path to the global `.env` file (`~/.config/laires/.env`).
+pub fn global_env_path() -> Option<PathBuf> {
+    Some(global_config_dir()?.join(".env"))
+}
+
+/// Load `.env` files for a project: global first, then project-local (overrides).
+/// Call this when opening a project so API keys are available in the process environment.
+pub fn load_env_for_project(project_root: &Path) {
+    // Global env first (lower priority)
+    if let Some(global_env) = global_env_path() {
+        dotenvy::from_path_override(&global_env).ok();
+    }
+    // Project-local .env overrides global
+    let project_env = project_root.join(".env");
+    if project_env.exists() {
+        dotenvy::from_path_override(&project_env).ok();
     }
 }
 
