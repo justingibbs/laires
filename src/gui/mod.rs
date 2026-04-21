@@ -594,17 +594,18 @@ impl GuiApp {
                     ui.text_edit_singleline(&mut dialog.model);
                 });
 
-                // API Key env var name
-                ui.horizontal(|ui| {
-                    ui.label("Env var:");
-                    ui.text_edit_singleline(&mut dialog.api_key_env);
-                });
+                // API Key fields — not needed for local models
+                if dialog.provider != "local" {
+                    ui.horizontal(|ui| {
+                        ui.label("Env var:");
+                        ui.text_edit_singleline(&mut dialog.api_key_env);
+                    });
 
-                // API Key value (password field)
-                ui.horizontal(|ui| {
-                    ui.label("API Key:");
-                    ui.add(egui::TextEdit::singleline(&mut dialog.api_key).password(true));
-                });
+                    ui.horizontal(|ui| {
+                        ui.label("API Key:");
+                        ui.add(egui::TextEdit::singleline(&mut dialog.api_key).password(true));
+                    });
+                }
 
                 // Base URL
                 ui.horizontal(|ui| {
