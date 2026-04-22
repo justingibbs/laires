@@ -445,12 +445,12 @@ The corkboard state is version-controlled alongside the rest of `.laires/`. This
 
 ## Open Questions
 
-- ~~**Interaction with modes**~~ — resolved, see Mode Integration section below.
+- ~~**Interaction with modes**~~ — resolved, see Mode Integration section.
 
-- **Note extraction granularity** — how fine-grained should extraction be? A beat sheet with 50 entries produces 50 cards, which may clutter the board. Should the writer control extraction granularity (chapter-level vs. scene-level vs. beat-level)?
+- **Note extraction granularity** — resolved. No cap on card count. Each beat in a planning document becomes a card. A 100-beat outline produces 100 cards. If the writer planned 100 scenes, that's 100 cards on the board — the board's job is to show the structure, not to hide it. Board size is handled through zoom and layout, not by suppressing cards.
 
-- **Card lifecycle** — when a plan card is promoted to a full scene and the prose diverges from the original plan, should the plan card update to reflect the prose, or preserve the original intention as a historical record?
+- **Card lifecycle** — resolved. Plan cards track the prose. When a linked scene's prose diverges from the original plan (characters change, objectives shift, summary no longer matches), the plan card updates to reflect the current state of the scene. The original intention is not preserved as a separate record — git history serves that purpose. The plan card always represents "what this beat *is* now," not "what I once thought it would be."
 
-- **Collaboration** — if multiple writers share a project, do they share one corkboard or maintain separate boards? Can plan cards be attributed to specific writers?
+- **Collaboration** — deferred. Laires is single-writer at this time. No multi-user board support needed.
 
-- **Board size** — a novel might have 60+ scenes and twice as many plan cards. What are the UX limits? Does the board need collapsing/grouping for large projects (e.g., collapse an act into a single super-card)?
+- **Board size** — handled through zoom. The corkboard already supports pan and zoom (the existing `graph_view.rs` force-directed layout has this). For large projects (100+ cards), the writer zooms out to see the full structure — cards shrink to colored dots showing status and type, transition edges remain visible as a network — then zooms in to work on a region. This is the same interaction model as any infinite canvas tool (Miro, Figma, etc.). No collapsing/grouping in v1 — zoom is sufficient. If it proves insufficient at scale, act-level grouping can be added later without changing the data model.
