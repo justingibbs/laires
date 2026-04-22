@@ -335,22 +335,21 @@ pub async fn run_tui() -> anyhow::Result<()> {
                             KeyCode::Backspace => {
                                 a.chat.input_buffer.pop();
                             }
-                            KeyCode::Enter => {
+                            KeyCode::Enter
                                 if !a.chat.input_buffer.trim().is_empty()
-                                    && matches!(a.agent_status, AgentStatus::Idle)
-                                {
-                                    let input: String = a.chat.input_buffer.drain(..).collect();
-                                    let input = input.trim().to_string();
-                                    if input == "quit" || input == "exit" || input == "/q" {
-                                        a.should_quit = true;
-                                    } else {
-                                        a.chat.history.push(ChatMessage {
-                                            role: "user".to_string(),
-                                            content: input.clone(),
-                                        });
-                                        a.agent_status = AgentStatus::Thinking;
-                                        let _ = req_tx.send(input);
-                                    }
+                                    && matches!(a.agent_status, AgentStatus::Idle) =>
+                            {
+                                let input: String = a.chat.input_buffer.drain(..).collect();
+                                let input = input.trim().to_string();
+                                if input == "quit" || input == "exit" || input == "/q" {
+                                    a.should_quit = true;
+                                } else {
+                                    a.chat.history.push(ChatMessage {
+                                        role: "user".to_string(),
+                                        content: input.clone(),
+                                    });
+                                    a.agent_status = AgentStatus::Thinking;
+                                    let _ = req_tx.send(input);
                                 }
                             }
                             KeyCode::Up => {

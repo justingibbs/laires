@@ -67,13 +67,11 @@ fn parse_document_xml(xml: &str) -> Result<String> {
                     current_para.clear();
                 }
             }
-            Ok(Event::Text(ref e)) => {
-                if in_t {
-                    let text = e.unescape().map_err(|err| {
-                        LairesError::DocxError(format!("XML decode error: {err}"))
-                    })?;
-                    current_para.push_str(&text);
-                }
+            Ok(Event::Text(ref e)) if in_t => {
+                let text = e
+                    .unescape()
+                    .map_err(|err| LairesError::DocxError(format!("XML decode error: {err}")))?;
+                current_para.push_str(&text);
             }
             Ok(Event::Eof) => break,
             Err(e) => {
