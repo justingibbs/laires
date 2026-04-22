@@ -38,6 +38,7 @@ pub struct SkillDefinition {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::enum_variant_names)]
 pub enum SkillCategory {
     FileTools,
     GraphTools,
@@ -218,10 +219,10 @@ impl Skills {
         });
 
         // Audit trail for custom skills
-        if self.custom_data.contains_key(skill_name) {
-            if let Some(root) = ctx.project_root {
-                self.write_audit_log(root, skill_name, args, &result, duration_ms);
-            }
+        if self.custom_data.contains_key(skill_name)
+            && let Some(root) = ctx.project_root
+        {
+            self.write_audit_log(root, skill_name, args, &result, duration_ms);
         }
 
         result

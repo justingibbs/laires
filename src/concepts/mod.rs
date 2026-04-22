@@ -1,11 +1,11 @@
 pub mod analysis;
-pub mod fountainmd;
 pub mod canvas;
 pub mod character_perspective;
 pub mod context_budget;
 pub mod declared_intent;
 pub mod docx;
 pub mod file_buffer_manager;
+pub mod fountainmd;
 pub mod manifest;
 pub mod narrative_graph;
 pub mod provider;

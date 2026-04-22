@@ -139,7 +139,8 @@ pub fn render(
 
                                     // Run search when query changes
                                     if response.changed() {
-                                        state.search_results = run_search(&state.search_query, snapshot);
+                                        state.search_results =
+                                            run_search(&state.search_query, snapshot);
                                         state.search_selected_index = 0;
                                         state.search_active = !state.search_query.is_empty();
                                     }
@@ -208,12 +209,7 @@ pub fn render(
                         let (label, fill, text_color) = if state.review_pending {
                             let pending_label = snapshot
                                 .as_ref()
-                                .map(|snap| {
-                                    format!(
-                                        "Scan ({} stale)",
-                                        snap.pending_scene_count,
-                                    )
-                                })
+                                .map(|snap| format!("Scan ({} stale)", snap.pending_scene_count,))
                                 .unwrap_or_else(|| "Scan".to_string());
                             (pending_label, Color32::from_rgb(180, 83, 9), Color32::WHITE)
                         } else if state.char_count == 0 {
@@ -221,21 +217,20 @@ pub fn render(
                         } else {
                             ("Scan".to_string(), theme.accent, Color32::WHITE)
                         };
-                        let scan_btn = egui::Button::new(
-                            RichText::new(label).color(text_color).size(12.0),
-                        )
-                        .fill(fill)
-                        .corner_radius(CornerRadius::same(8));
+                        let scan_btn =
+                            egui::Button::new(RichText::new(label).color(text_color).size(12.0))
+                                .fill(fill)
+                                .corner_radius(CornerRadius::same(8));
                         let response = ui.add(scan_btn);
                         if response.clicked() {
                             ctx.memory_mut(|mem| {
                                 mem.data.insert_temp(egui::Id::new("scan_requested"), true);
                             });
                         }
-                        if state.review_pending {
-                            if let Some(text) = &state.review_status_text {
-                                response.on_hover_text(text);
-                            }
+                        if state.review_pending
+                            && let Some(text) = &state.review_status_text
+                        {
+                            response.on_hover_text(text);
                         }
                     }
 
@@ -252,11 +247,9 @@ pub fn render(
                         );
                     }
 
-                    if !is_narrow {
-                        if let Some(usage) = &state.last_usage {
-                            ui.add_space(8.0);
-                            ui.label(RichText::new(usage).color(theme.text_secondary).size(10.0));
-                        }
+                    if !is_narrow && let Some(usage) = &state.last_usage {
+                        ui.add_space(8.0);
+                        ui.label(RichText::new(usage).color(theme.text_secondary).size(10.0));
                     }
                 });
             });
@@ -321,7 +314,9 @@ fn render_search_dropdown(
 ) {
     // Handle keyboard navigation while search is active
     ctx.input(|i| {
-        if i.key_pressed(egui::Key::ArrowDown) || (i.key_pressed(egui::Key::Enter) && i.modifiers.shift) {
+        if i.key_pressed(egui::Key::ArrowDown)
+            || (i.key_pressed(egui::Key::Enter) && i.modifiers.shift)
+        {
             // intentionally empty — handled below
         }
     });
@@ -454,7 +449,11 @@ fn render_search_dropdown(
                             format!(
                                 "{} {}",
                                 state.search_results.len(),
-                                if state.search_results.len() == 1 { "match" } else { "matches" }
+                                if state.search_results.len() == 1 {
+                                    "match"
+                                } else {
+                                    "matches"
+                                }
                             )
                         };
                         ui.label(

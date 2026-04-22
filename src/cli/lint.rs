@@ -58,16 +58,15 @@ pub fn run() -> anyhow::Result<()> {
             description,
             ..
         } = obj
+            && graph.get_node(character_id).is_none()
         {
-            if graph.get_node(character_id).is_none() {
-                print_issue(
-                    "error",
-                    &format!(
-                        "Orphaned objective: \"{description}\" references nonexistent character {character_id}"
-                    ),
-                );
-                error_count += 1;
-            }
+            print_issue(
+                "error",
+                &format!(
+                    "Orphaned objective: \"{description}\" references nonexistent character {character_id}"
+                ),
+            );
+            error_count += 1;
         }
     }
 

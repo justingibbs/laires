@@ -13,15 +13,14 @@ impl Skills {
                 description,
                 ..
             } = obj
+                && ctx.graph.get_node(character_id).is_none()
             {
-                if ctx.graph.get_node(character_id).is_none() {
-                    issues.push(serde_json::json!({
+                issues.push(serde_json::json!({
                         "severity": "error",
                         "type": "orphaned_objective",
                         "message": format!("Objective \"{description}\" references nonexistent character {character_id}"),
                         "node_id": id,
                     }));
-                }
             }
         }
 

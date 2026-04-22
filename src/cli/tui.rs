@@ -272,115 +272,108 @@ pub async fn run_tui() -> anyhow::Result<()> {
         }
 
         // Poll keyboard events (50ms timeout keeps UI responsive)
-        if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                if let Ok(mut a) = app.try_lock() {
-                    match (key.modifiers, key.code) {
-                        (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
-                            a.should_quit = true;
-                        }
-                        (KeyModifiers::CONTROL, KeyCode::Char('g')) => {
-                            toggle_overlay(&mut a, OverlayKind::Graph);
-                        }
-                        (KeyModifiers::CONTROL, KeyCode::Char('l')) => {
-                            toggle_overlay(&mut a, OverlayKind::Lint);
-                        }
-                        (KeyModifiers::CONTROL, KeyCode::Char('p')) => {
-                            toggle_overlay(&mut a, OverlayKind::Pacing);
-                        }
-                        (KeyModifiers::CONTROL, KeyCode::Char('e')) => {
-                            toggle_overlay(&mut a, OverlayKind::FileExplorer);
-                        }
-                        (KeyModifiers::CONTROL, KeyCode::Char('/')) => {
-                            a.status_expanded = !a.status_expanded;
-                        }
-                        (_, KeyCode::Esc) => {
-                            if a.overlay.is_some() {
-                                a.overlay = None;
-                                a.overlay_content.clear();
-                                a.overlay_scroll = 0;
+        if event::poll(Duration::from_millis(50))?
+            && let Event::Key(key) = event::read()?
+            && let Ok(mut a) = app.try_lock()
+        {
+            match (key.modifiers, key.code) {
+                (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+                    a.should_quit = true;
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('g')) => {
+                    toggle_overlay(&mut a, OverlayKind::Graph);
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('l')) => {
+                    toggle_overlay(&mut a, OverlayKind::Lint);
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('p')) => {
+                    toggle_overlay(&mut a, OverlayKind::Pacing);
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('e')) => {
+                    toggle_overlay(&mut a, OverlayKind::FileExplorer);
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('/')) => {
+                    a.status_expanded = !a.status_expanded;
+                }
+                (_, KeyCode::Esc) => {
+                    if a.overlay.is_some() {
+                        a.overlay = None;
+                        a.overlay_content.clear();
+                        a.overlay_scroll = 0;
+                    }
+                }
+                (_, KeyCode::Tab) => {
+                    a.active_pane = match a.active_pane {
+                        Pane::Chat => Pane::Canvas,
+                        Pane::Canvas => Pane::Chat,
+                    };
+                }
+                _ => {
+                    if a.overlay.is_some() {
+                        match key.code {
+                            KeyCode::Up => {
+                                a.overlay_scroll = a.overlay_scroll.saturating_sub(1);
                             }
+                            KeyCode::Down => {
+                                let max = a.overlay_content.len().saturating_sub(1);
+                                a.overlay_scroll = a.overlay_scroll.saturating_add(1).min(max);
+                            }
+                            KeyCode::PageUp => {
+                                a.overlay_scroll = a.overlay_scroll.saturating_sub(10);
+                            }
+                            KeyCode::PageDown => {
+                                let max = a.overlay_content.len().saturating_sub(1);
+                                a.overlay_scroll = a.overlay_scroll.saturating_add(10).min(max);
+                            }
+                            _ => {}
                         }
-                        (_, KeyCode::Tab) => {
-                            a.active_pane = match a.active_pane {
-                                Pane::Chat => Pane::Canvas,
-                                Pane::Canvas => Pane::Chat,
-                            };
-                        }
-                        _ => {
-                            if a.overlay.is_some() {
-                                match key.code {
-                                    KeyCode::Up => {
-                                        a.overlay_scroll = a.overlay_scroll.saturating_sub(1);
-                                    }
-                                    KeyCode::Down => {
-                                        let max = a.overlay_content.len().saturating_sub(1);
-                                        a.overlay_scroll =
-                                            a.overlay_scroll.saturating_add(1).min(max);
-                                    }
-                                    KeyCode::PageUp => {
-                                        a.overlay_scroll = a.overlay_scroll.saturating_sub(10);
-                                    }
-                                    KeyCode::PageDown => {
-                                        let max = a.overlay_content.len().saturating_sub(1);
-                                        a.overlay_scroll =
-                                            a.overlay_scroll.saturating_add(10).min(max);
-                                    }
-                                    _ => {}
-                                }
-                            } else if a.active_pane == Pane::Chat {
-                                match key.code {
-                                    KeyCode::Char(c) => {
-                                        a.chat.input_buffer.push(c);
-                                    }
-                                    KeyCode::Backspace => {
-                                        a.chat.input_buffer.pop();
-                                    }
-                                    KeyCode::Enter => {
-                                        if !a.chat.input_buffer.trim().is_empty()
-                                            && matches!(a.agent_status, AgentStatus::Idle)
-                                        {
-                                            let input: String =
-                                                a.chat.input_buffer.drain(..).collect();
-                                            let input = input.trim().to_string();
-                                            if input == "quit" || input == "exit" || input == "/q" {
-                                                a.should_quit = true;
-                                            } else {
-                                                a.chat.history.push(ChatMessage {
-                                                    role: "user".to_string(),
-                                                    content: input.clone(),
-                                                });
-                                                a.agent_status = AgentStatus::Thinking;
-                                                let _ = req_tx.send(input);
-                                            }
-                                        }
-                                    }
-                                    KeyCode::Up => {
-                                        a.chat.scroll_offset =
-                                            a.chat.scroll_offset.saturating_add(1);
-                                    }
-                                    KeyCode::Down => {
-                                        a.chat.scroll_offset =
-                                            a.chat.scroll_offset.saturating_sub(1);
-                                    }
-                                    _ => {}
-                                }
-                            } else {
-                                // Canvas pane navigation
-                                match key.code {
-                                    KeyCode::Up => a.canvas.scroll(-1),
-                                    KeyCode::Down => a.canvas.scroll(1),
-                                    KeyCode::PageUp => a.canvas.scroll(-10),
-                                    KeyCode::PageDown => a.canvas.scroll(10),
-                                    _ => {}
+                    } else if a.active_pane == Pane::Chat {
+                        match key.code {
+                            KeyCode::Char(c) => {
+                                a.chat.input_buffer.push(c);
+                            }
+                            KeyCode::Backspace => {
+                                a.chat.input_buffer.pop();
+                            }
+                            KeyCode::Enter
+                                if !a.chat.input_buffer.trim().is_empty()
+                                    && matches!(a.agent_status, AgentStatus::Idle) =>
+                            {
+                                let input: String = a.chat.input_buffer.drain(..).collect();
+                                let input = input.trim().to_string();
+                                if input == "quit" || input == "exit" || input == "/q" {
+                                    a.should_quit = true;
+                                } else {
+                                    a.chat.history.push(ChatMessage {
+                                        role: "user".to_string(),
+                                        content: input.clone(),
+                                    });
+                                    a.agent_status = AgentStatus::Thinking;
+                                    let _ = req_tx.send(input);
                                 }
                             }
+                            KeyCode::Up => {
+                                a.chat.scroll_offset = a.chat.scroll_offset.saturating_add(1);
+                            }
+                            KeyCode::Down => {
+                                a.chat.scroll_offset = a.chat.scroll_offset.saturating_sub(1);
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        // Canvas pane navigation
+                        match key.code {
+                            KeyCode::Up => a.canvas.scroll(-1),
+                            KeyCode::Down => a.canvas.scroll(1),
+                            KeyCode::PageUp => a.canvas.scroll(-10),
+                            KeyCode::PageDown => a.canvas.scroll(10),
+                            _ => {}
                         }
                     }
-
-                    should_quit = a.should_quit;
                 }
             }
+
+            should_quit = a.should_quit;
         }
 
         if should_quit {
@@ -623,11 +616,7 @@ fn draw_chat_pane(f: &mut Frame, app: &App, area: Rect) {
 
     let visible_height = chat_chunks[0].height as usize;
     let total = items.len();
-    let offset = if total > visible_height {
-        total - visible_height
-    } else {
-        0
-    };
+    let offset = total.saturating_sub(visible_height);
 
     let visible_items: Vec<ListItem> = items.into_iter().skip(offset).collect();
     let history_list = List::new(visible_items);
@@ -742,9 +731,7 @@ fn draw_overlay(f: &mut Frame, app: &App, kind: &OverlayKind, area: Rect) {
 }
 
 fn toggle_overlay(app: &mut App, kind: OverlayKind) {
-    if app.overlay.as_ref().map(|k| std::mem::discriminant(k))
-        == Some(std::mem::discriminant(&kind))
-    {
+    if app.overlay.as_ref().map(std::mem::discriminant) == Some(std::mem::discriminant(&kind)) {
         app.overlay = None;
         app.overlay_content.clear();
         app.overlay_scroll = 0;
@@ -935,21 +922,21 @@ async fn execute_tui_tool_calls(
         });
     }
 
-    if let Some(fbm) = a.file_buffer_manager.as_mut() {
-        if let Err(e) = fbm.save_dirty() {
-            a.chat.history.push(ChatMessage {
-                role: "error".to_string(),
-                content: format!("Failed to save: {e}"),
-            });
-        }
+    if let Some(fbm) = a.file_buffer_manager.as_mut()
+        && let Err(e) = fbm.save_dirty()
+    {
+        a.chat.history.push(ChatMessage {
+            role: "error".to_string(),
+            content: format!("Failed to save: {e}"),
+        });
     }
-    if a.text_buffer.is_dirty() {
-        if let Err(e) = a.text_buffer.save() {
-            a.chat.history.push(ChatMessage {
-                role: "error".to_string(),
-                content: format!("Failed to save: {e}"),
-            });
-        }
+    if a.text_buffer.is_dirty()
+        && let Err(e) = a.text_buffer.save()
+    {
+        a.chat.history.push(ChatMessage {
+            role: "error".to_string(),
+            content: format!("Failed to save: {e}"),
+        });
     }
 
     tool_results

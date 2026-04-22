@@ -24,7 +24,7 @@ pub fn init_at(project_dir: &Path, title: &str, fountain: bool) -> anyhow::Resul
     if fountain {
         config.project.format = "fountain".to_string();
     }
-    config.save(&project_dir)?;
+    config.save(project_dir)?;
 
     // Create story file if it doesn't exist
     let story_file = if fountain {

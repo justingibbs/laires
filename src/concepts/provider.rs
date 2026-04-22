@@ -219,7 +219,7 @@ impl Provider {
         let api_messages: Vec<serde_json::Value> = messages
             .iter()
             .filter(|m| m.role != Role::System)
-            .map(|m| format_anthropic_message(m))
+            .map(format_anthropic_message)
             .collect();
 
         let mut body = serde_json::json!({
@@ -516,48 +516,48 @@ fn format_anthropic_message(m: &Message) -> serde_json::Value {
     };
 
     // Assistant message with tool calls -> content blocks
-    if m.role == Role::Assistant {
-        if let Some(tool_calls) = &m.tool_calls {
-            let mut content_blocks = Vec::new();
-            if !m.content.is_empty() {
-                content_blocks.push(serde_json::json!({
-                    "type": "text",
-                    "text": m.content,
-                }));
-            }
-            for tc in tool_calls {
-                content_blocks.push(serde_json::json!({
-                    "type": "tool_use",
-                    "id": tc.id,
-                    "name": tc.name,
-                    "input": tc.arguments,
-                }));
-            }
-            return serde_json::json!({
-                "role": "assistant",
-                "content": content_blocks,
-            });
+    if m.role == Role::Assistant
+        && let Some(tool_calls) = &m.tool_calls
+    {
+        let mut content_blocks = Vec::new();
+        if !m.content.is_empty() {
+            content_blocks.push(serde_json::json!({
+                "type": "text",
+                "text": m.content,
+            }));
         }
+        for tc in tool_calls {
+            content_blocks.push(serde_json::json!({
+                "type": "tool_use",
+                "id": tc.id,
+                "name": tc.name,
+                "input": tc.arguments,
+            }));
+        }
+        return serde_json::json!({
+            "role": "assistant",
+            "content": content_blocks,
+        });
     }
 
     // User message with tool results -> content blocks
-    if let Some(tool_results) = &m.tool_results {
-        if !tool_results.is_empty() {
-            let content_blocks: Vec<serde_json::Value> = tool_results
-                .iter()
-                .map(|tr| {
-                    serde_json::json!({
-                        "type": "tool_result",
-                        "tool_use_id": tr.tool_call_id,
-                        "content": serde_json::to_string(&tr.result).unwrap_or_default(),
-                    })
+    if let Some(tool_results) = &m.tool_results
+        && !tool_results.is_empty()
+    {
+        let content_blocks: Vec<serde_json::Value> = tool_results
+            .iter()
+            .map(|tr| {
+                serde_json::json!({
+                    "type": "tool_result",
+                    "tool_use_id": tr.tool_call_id,
+                    "content": serde_json::to_string(&tr.result).unwrap_or_default(),
                 })
-                .collect();
-            return serde_json::json!({
-                "role": "user",
-                "content": content_blocks,
-            });
-        }
+            })
+            .collect();
+        return serde_json::json!({
+            "role": "user",
+            "content": content_blocks,
+        });
     }
 
     // Plain text message
@@ -579,46 +579,46 @@ fn format_openai_message(m: &Message) -> Vec<serde_json::Value> {
     };
 
     // Assistant message with tool calls
-    if m.role == Role::Assistant {
-        if let Some(tool_calls) = &m.tool_calls {
-            let tc_array: Vec<serde_json::Value> = tool_calls
-                .iter()
-                .map(|tc| {
-                    serde_json::json!({
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": serde_json::to_string(&tc.arguments).unwrap_or_default(),
-                        }
-                    })
+    if m.role == Role::Assistant
+        && let Some(tool_calls) = &m.tool_calls
+    {
+        let tc_array: Vec<serde_json::Value> = tool_calls
+            .iter()
+            .map(|tc| {
+                serde_json::json!({
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.name,
+                        "arguments": serde_json::to_string(&tc.arguments).unwrap_or_default(),
+                    }
                 })
-                .collect();
-            let mut msg = serde_json::json!({
-                "role": "assistant",
-                "tool_calls": tc_array,
-            });
-            if !m.content.is_empty() {
-                msg["content"] = serde_json::json!(m.content);
-            }
-            return vec![msg];
+            })
+            .collect();
+        let mut msg = serde_json::json!({
+            "role": "assistant",
+            "tool_calls": tc_array,
+        });
+        if !m.content.is_empty() {
+            msg["content"] = serde_json::json!(m.content);
         }
+        return vec![msg];
     }
 
     // Tool results -> separate messages with role "tool"
-    if let Some(tool_results) = &m.tool_results {
-        if !tool_results.is_empty() {
-            return tool_results
-                .iter()
-                .map(|tr| {
-                    serde_json::json!({
-                        "role": "tool",
-                        "tool_call_id": tr.tool_call_id,
-                        "content": serde_json::to_string(&tr.result).unwrap_or_default(),
-                    })
+    if let Some(tool_results) = &m.tool_results
+        && !tool_results.is_empty()
+    {
+        return tool_results
+            .iter()
+            .map(|tr| {
+                serde_json::json!({
+                    "role": "tool",
+                    "tool_call_id": tr.tool_call_id,
+                    "content": serde_json::to_string(&tr.result).unwrap_or_default(),
                 })
-                .collect();
-        }
+            })
+            .collect();
     }
 
     // Plain text message

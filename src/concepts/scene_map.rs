@@ -339,15 +339,15 @@ fn detect_prose_boundaries(text: &str) -> Vec<SceneBoundary> {
     // with a title (the heading), or the later one if neither has a title.
     let mut merged: Vec<SceneBoundary> = Vec::new();
     for b in boundaries {
-        if let Some(last) = merged.last_mut() {
-            if b.offset - last.offset < MERGE_GAP_BYTES {
-                // Merge: prefer the one with a title
-                if b.title.is_some() {
-                    last.title = b.title;
-                    last.offset = b.offset;
-                }
-                continue;
+        if let Some(last) = merged.last_mut()
+            && b.offset - last.offset < MERGE_GAP_BYTES
+        {
+            // Merge: prefer the one with a title
+            if b.title.is_some() {
+                last.title = b.title;
+                last.offset = b.offset;
             }
+            continue;
         }
         merged.push(b);
     }

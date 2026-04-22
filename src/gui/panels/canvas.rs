@@ -1,9 +1,9 @@
 use eframe::egui::{self, Color32, CornerRadius, FontFamily, FontId, RichText, Vec2};
 
+use super::canvas_preview;
 use crate::gui::ProjectSnapshot;
 use crate::gui::state::{CanvasViewMode, GuiState, SessionMode};
 use crate::gui::theme::{LairesTheme, PROSE_FONT};
-use super::canvas_preview;
 
 /// Font used for story prose text (Source Serif 4).
 fn prose_font(size: f32) -> FontId {
@@ -41,11 +41,11 @@ pub fn render(
     }
 
     // Handle search navigation: switch to the target file
-    if let Some(nav_file) = state.search_navigate_file.take() {
-        if snap.file_texts.contains_key(&nav_file) {
-            state.selected_file = Some(nav_file);
-            state.canvas_dirty = false; // allow buffer sync below
-        }
+    if let Some(nav_file) = state.search_navigate_file.take()
+        && snap.file_texts.contains_key(&nav_file)
+    {
+        state.selected_file = Some(nav_file);
+        state.canvas_dirty = false; // allow buffer sync below
     }
 
     // Auto-select first file if none selected and we have per-file data
@@ -80,11 +80,11 @@ pub fn render(
 
     // Sync canvas edit buffer when file selection changes or buffer is empty
     let edit_file_matches = state.canvas_edit_file == state.selected_file;
-    if !edit_file_matches || (state.canvas_edit_text.is_empty() && !display_text.is_empty()) {
-        if !state.canvas_dirty {
-            state.canvas_edit_text = display_text.clone();
-            state.canvas_edit_file = state.selected_file.clone();
-        }
+    if (!edit_file_matches || (state.canvas_edit_text.is_empty() && !display_text.is_empty()))
+        && !state.canvas_dirty
+    {
+        state.canvas_edit_text = display_text.clone();
+        state.canvas_edit_file = state.selected_file.clone();
     }
 
     // Wrap entire canvas in a card frame — fill all available space.
@@ -165,7 +165,14 @@ pub fn render(
                         ui.add_space(16.0);
                         ui.vertical(|ui| {
                             ui.set_max_width((ui.available_width() - 16.0).max(0.0));
-                            render_prose(ui, display_text, display_boundaries, theme, search_query.as_deref(), scroll_target);
+                            render_prose(
+                                ui,
+                                display_text,
+                                display_boundaries,
+                                theme,
+                                search_query.as_deref(),
+                                scroll_target,
+                            );
                         });
                     });
                 });
@@ -253,9 +260,7 @@ fn file_supports_preview(file_path: Option<&str>) -> bool {
     match file_path {
         Some(path) => {
             let lower = path.to_lowercase();
-            lower.ends_with(".md")
-                || lower.ends_with(".markdown")
-                || lower.ends_with(".fountain")
+            lower.ends_with(".md") || lower.ends_with(".markdown") || lower.ends_with(".fountain")
         }
         // No file selected (single-file project) — allow preview
         None => true,
@@ -451,8 +456,7 @@ fn render_prose(
             };
             let rect = ui.available_rect_before_wrap();
             // Paint a full-width highlight behind the next line
-            let highlight_rect =
-                egui::Rect::from_min_size(rect.min, Vec2::new(rect.width(), 24.0));
+            let highlight_rect = egui::Rect::from_min_size(rect.min, Vec2::new(rect.width(), 24.0));
             ui.painter()
                 .rect_filled(highlight_rect, CornerRadius::same(2), bg);
         }

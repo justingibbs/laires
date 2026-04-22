@@ -1,8 +1,12 @@
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
 use crate::concepts::declared_intent::DeclaredIntent;
+#[cfg(test)]
 use crate::concepts::narrative_graph::{GraphNode, NarrativeGraph, Status};
+#[cfg(test)]
 use crate::runtime::story_access::StoryAccess;
+#[cfg(test)]
 use crate::sync::divergence;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -23,6 +27,7 @@ pub struct StoryEvalSnapshot {
 }
 
 impl StoryEvalSnapshot {
+    #[cfg(test)]
     pub fn capture(
         graph: &NarrativeGraph,
         intent: &DeclaredIntent,

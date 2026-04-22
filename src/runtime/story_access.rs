@@ -87,10 +87,10 @@ impl<'a> StoryAccess<'a> {
                 .map(|scene| scene.id.clone());
         }
 
-        if let Some(fbm) = self.file_buffer_manager {
-            if fbm.get_scene(scene_ref).is_some() {
-                return Some(scene_ref.to_string());
-            }
+        if let Some(fbm) = self.file_buffer_manager
+            && fbm.get_scene(scene_ref).is_some()
+        {
+            return Some(scene_ref.to_string());
         }
 
         self.primary_scene_map
@@ -212,12 +212,16 @@ impl<'a> StoryAccess<'a> {
             .lines()
             .enumerate()
             .filter_map(|(line_num, line)| {
-                re.is_match(line).then(|| StorySearchHit {
-                    file_path: String::new(),
-                    byte_offset: 0,
-                    line_number: line_num + 1,
-                    context: line.trim().to_string(),
-                })
+                if re.is_match(line) {
+                    Some(StorySearchHit {
+                        file_path: String::new(),
+                        byte_offset: 0,
+                        line_number: line_num + 1,
+                        context: line.trim().to_string(),
+                    })
+                } else {
+                    None
+                }
             })
             .collect();
         Ok(hits)

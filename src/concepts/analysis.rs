@@ -320,12 +320,11 @@ pub(crate) fn extract_json(response: &str) -> Option<serde_json::Value> {
 
     // Strategy 2: Strip markdown code fences (```json ... ``` or ``` ... ```)
     let fence_re = Regex::new(r"(?s)```(?:json)?\s*\n?(.*?)\n?\s*```").unwrap();
-    if let Some(caps) = fence_re.captures(trimmed) {
-        if let Some(inner) = caps.get(1) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(inner.as_str().trim()) {
-                return Some(v);
-            }
-        }
+    if let Some(caps) = fence_re.captures(trimmed)
+        && let Some(inner) = caps.get(1)
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(inner.as_str().trim())
+    {
+        return Some(v);
     }
 
     // Strategy 3: Find the first { ... } block in the response
@@ -346,10 +345,10 @@ pub(crate) fn extract_json(response: &str) -> Option<serde_json::Value> {
                 _ => {}
             }
         }
-        if let Some(end) = end {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&trimmed[start..end]) {
-                return Some(v);
-            }
+        if let Some(end) = end
+            && let Ok(v) = serde_json::from_str::<serde_json::Value>(&trimmed[start..end])
+        {
+            return Some(v);
         }
     }
 
@@ -642,20 +641,20 @@ fn parse_analysis_response(
 
     // Fallback: if top-level characters is empty but scene_metadata has
     // characters_present, synthesize CharacterData from those names.
-    if characters_found.is_empty() {
-        if let Some(ref meta) = scene_metadata {
-            let known: std::collections::HashSet<String> = characters_found
-                .iter()
-                .map(|c| c.name.to_lowercase())
-                .collect();
-            for name in &meta.characters_present {
-                if !known.contains(&name.to_lowercase()) {
-                    characters_found.push(CharacterData {
-                        name: name.clone(),
-                        aliases: Vec::new(),
-                        description: String::new(),
-                    });
-                }
+    if characters_found.is_empty()
+        && let Some(ref meta) = scene_metadata
+    {
+        let known: std::collections::HashSet<String> = characters_found
+            .iter()
+            .map(|c| c.name.to_lowercase())
+            .collect();
+        for name in &meta.characters_present {
+            if !known.contains(&name.to_lowercase()) {
+                characters_found.push(CharacterData {
+                    name: name.clone(),
+                    aliases: Vec::new(),
+                    description: String::new(),
+                });
             }
         }
     }

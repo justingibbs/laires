@@ -197,19 +197,18 @@ fn resolve_canvas_target(
         if let Some(file) = requested_file {
             if fbm.get_entry(file).is_some() {
                 // Check editability via manifest
-                if let Some(manifest) = ctx.manifest {
-                    if let Some(sf) = manifest.story_files.iter().find(|sf| sf.path == file) {
-                        if !sf.editable {
-                            return Err(serde_json::json!({
-                                "error": format!(
-                                    "Cannot edit '{}' — it is a read-only file ({}). \
-                                     Use Consultant mode for revision suggestions, \
-                                     or convert to .md with `laires convert`.",
-                                    file, sf.format
-                                )
-                            }));
-                        }
-                    }
+                if let Some(manifest) = ctx.manifest
+                    && let Some(sf) = manifest.story_files.iter().find(|sf| sf.path == file)
+                    && !sf.editable
+                {
+                    return Err(serde_json::json!({
+                        "error": format!(
+                            "Cannot edit '{}' — it is a read-only file ({}). \
+                             Use Consultant mode for revision suggestions, \
+                             or convert to .md with `laires convert`.",
+                            file, sf.format
+                        )
+                    }));
                 }
                 return Ok(CanvasTarget::Manifest(file.to_string()));
             }
@@ -219,19 +218,18 @@ fn resolve_canvas_target(
         if fbm.story_file_count() == 1 {
             let file_path = &fbm.entries()[0].file_path;
             // Check editability for single-file projects too
-            if let Some(manifest) = ctx.manifest {
-                if let Some(sf) = manifest.story_files.iter().find(|sf| &sf.path == file_path) {
-                    if !sf.editable {
-                        return Err(serde_json::json!({
-                            "error": format!(
-                                "Cannot edit '{}' — it is a read-only file ({}). \
-                                 Use Consultant mode for revision suggestions, \
-                                 or convert to .md with `laires convert`.",
-                                file_path, sf.format
-                            )
-                        }));
-                    }
-                }
+            if let Some(manifest) = ctx.manifest
+                && let Some(sf) = manifest.story_files.iter().find(|sf| &sf.path == file_path)
+                && !sf.editable
+            {
+                return Err(serde_json::json!({
+                    "error": format!(
+                        "Cannot edit '{}' — it is a read-only file ({}). \
+                         Use Consultant mode for revision suggestions, \
+                         or convert to .md with `laires convert`.",
+                        file_path, sf.format
+                    )
+                }));
             }
             return Ok(CanvasTarget::Manifest(file_path.clone()));
         }
@@ -277,17 +275,18 @@ fn resolve_insert_target(
             })
         })?;
 
-        if let Some(file) = requested_file {
-            if !scene.file_path.is_empty() && file != scene.file_path {
-                return Err(serde_json::json!({
-                    "error": format!(
-                        "Scene '{}' belongs to '{}', not '{}'",
-                        scene_ref,
-                        scene.file_path,
-                        file
-                    )
-                }));
-            }
+        if let Some(file) = requested_file
+            && !scene.file_path.is_empty()
+            && file != scene.file_path
+        {
+            return Err(serde_json::json!({
+                "error": format!(
+                    "Scene '{}' belongs to '{}', not '{}'",
+                    scene_ref,
+                    scene.file_path,
+                    file
+                )
+            }));
         }
 
         if let Some(fbm) = ctx.file_buffer_manager.as_deref() {

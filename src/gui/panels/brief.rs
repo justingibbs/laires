@@ -122,30 +122,30 @@ fn render_brief_markdown(ui: &mut egui::Ui, markdown: &str, theme: &LairesTheme)
         }
 
         // Headings
-        if trimmed.starts_with("### ") {
+        if let Some(heading) = trimmed.strip_prefix("### ") {
             ui.add_space(6.0);
             ui.label(
-                RichText::new(&trimmed[4..])
+                RichText::new(heading)
                     .color(theme.text_primary)
                     .size(14.0)
                     .strong(),
             );
             continue;
         }
-        if trimmed.starts_with("## ") {
+        if let Some(heading) = trimmed.strip_prefix("## ") {
             ui.add_space(8.0);
             ui.label(
-                RichText::new(&trimmed[3..])
+                RichText::new(heading)
                     .color(theme.text_primary)
                     .size(16.0)
                     .strong(),
             );
             continue;
         }
-        if trimmed.starts_with("# ") {
+        if let Some(heading) = trimmed.strip_prefix("# ") {
             ui.add_space(10.0);
             ui.label(
-                RichText::new(&trimmed[2..])
+                RichText::new(heading)
                     .color(theme.text_primary)
                     .size(18.0)
                     .strong(),
@@ -154,8 +154,7 @@ fn render_brief_markdown(ui: &mut egui::Ui, markdown: &str, theme: &LairesTheme)
         }
 
         // Blockquotes
-        if trimmed.starts_with("> ") {
-            let quote_text = &trimmed[2..];
+        if let Some(quote_text) = trimmed.strip_prefix("> ") {
             egui::Frame::NONE
                 .fill(theme.bg_secondary)
                 .inner_margin(egui::Margin {

@@ -169,7 +169,7 @@ fn extract_key_phrase(text: &str) -> String {
 
     // Take first sentence or first 80 chars, whichever is shorter
     let first_sentence = trimmed
-        .split_once(|c: char| c == '.' || c == '?' || c == '!')
+        .split_once(['.', '?', '!'])
         .map(|(s, _)| s.trim())
         .unwrap_or(trimmed);
 
@@ -210,10 +210,10 @@ pub fn extract_relevant_ids(user_input: &str, graph: &NarrativeGraph) -> Vec<Str
             title: Some(title),
             ..
         } = node
+            && title.len() >= 3
+            && input_lower.contains(&title.to_lowercase())
         {
-            if title.len() >= 3 && input_lower.contains(&title.to_lowercase()) {
-                ids.push(id.clone());
-            }
+            ids.push(id.clone());
         }
     }
 

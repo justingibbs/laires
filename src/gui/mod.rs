@@ -40,10 +40,11 @@ fn infer_session_mode(
         }
     }
     // Infer from manifest: if all story files are editable, default Workshop
-    if let Some(m) = manifest {
-        if !m.story_files.is_empty() && m.story_files.iter().all(|f| f.editable) {
-            return SessionMode::Workshop;
-        }
+    if let Some(m) = manifest
+        && !m.story_files.is_empty()
+        && m.story_files.iter().all(|f| f.editable)
+    {
+        return SessionMode::Workshop;
     }
     SessionMode::Consultant
 }
@@ -166,8 +167,6 @@ pub(crate) struct ProjectSnapshot {
     /// Brief revision count and rendered markdown (for Brief panel).
     brief_revision_count: usize,
     brief_markdown: String,
-    /// Whether the currently selected file supports Preview mode (.md / .fountain).
-    preview_available: bool,
 }
 
 impl GuiApp {
@@ -276,26 +275,26 @@ impl GuiApp {
                 }
                 AgentEvent::StateChanged => {
                     // Rebuild snapshot from domain
-                    if let Some(d) = &self.domain {
-                        if let Ok(proj) = d.try_lock() {
-                            self.snapshot = Some(build_snapshot(&proj));
-                            let story = StoryAccess::new(
-                                &proj.text_buffer,
-                                &proj.scene_map,
-                                proj.file_buffer_manager.as_ref(),
-                            );
-                            self.gui_state.scene_count = story.scene_count();
-                            self.gui_state.char_count = proj.graph.get_characters().len();
-                            self.gui_state.word_count = story.word_count();
-                            self.gui_state.graph_needs_rebuild = true;
-                            self.gui_state.review_pending = self
-                                .snapshot
-                                .as_ref()
-                                .map(|snap| snap.pending_scene_count > 0)
-                                .unwrap_or(false);
-                            self.gui_state.review_status_text =
-                                build_review_status_text(self.snapshot.as_ref());
-                        }
+                    if let Some(d) = &self.domain
+                        && let Ok(proj) = d.try_lock()
+                    {
+                        self.snapshot = Some(build_snapshot(&proj));
+                        let story = StoryAccess::new(
+                            &proj.text_buffer,
+                            &proj.scene_map,
+                            proj.file_buffer_manager.as_ref(),
+                        );
+                        self.gui_state.scene_count = story.scene_count();
+                        self.gui_state.char_count = proj.graph.get_characters().len();
+                        self.gui_state.word_count = story.word_count();
+                        self.gui_state.graph_needs_rebuild = true;
+                        self.gui_state.review_pending = self
+                            .snapshot
+                            .as_ref()
+                            .map(|snap| snap.pending_scene_count > 0)
+                            .unwrap_or(false);
+                        self.gui_state.review_status_text =
+                            build_review_status_text(self.snapshot.as_ref());
                     }
                 }
                 AgentEvent::UsageReport {
@@ -428,9 +427,7 @@ impl GuiApp {
             )) {
                 self.gui_state.search_active = true;
                 ctx.memory_mut(|mem| {
-                    mem.request_focus(egui::Id::new(
-                        panels::status_bar::SEARCH_INPUT_ID,
-                    ));
+                    mem.request_focus(egui::Id::new(panels::status_bar::SEARCH_INPUT_ID));
                 });
             }
         });
@@ -657,37 +654,36 @@ impl GuiApp {
 
         // Handle provider switch: save old settings to history, restore or default new ones.
         // Done here (outside the egui closure) so we can access self.provider_history.
-        if let Some(old_provider) = provider_changed_from {
-            if let Some(dialog) = &mut self.settings_dialog {
-                // Save the old provider's settings
-                self.provider_history.insert(
-                    old_provider,
-                    ProviderSettings {
-                        model: dialog.model.clone(),
-                        api_key_env: dialog.api_key_env.clone(),
-                        api_key: dialog.api_key.clone(),
-                        base_url: dialog.base_url.clone(),
-                    },
-                );
+        if let Some(old_provider) = provider_changed_from
+            && let Some(dialog) = &mut self.settings_dialog
+        {
+            // Save the old provider's settings
+            self.provider_history.insert(
+                old_provider,
+                ProviderSettings {
+                    model: dialog.model.clone(),
+                    api_key_env: dialog.api_key_env.clone(),
+                    api_key: dialog.api_key.clone(),
+                    base_url: dialog.base_url.clone(),
+                },
+            );
 
-                // Restore saved settings or fill defaults
-                if let Some(saved) = self.provider_history.get(&dialog.provider) {
-                    dialog.model = saved.model.clone();
-                    dialog.api_key_env = saved.api_key_env.clone();
-                    dialog.api_key = saved.api_key.clone();
-                    dialog.base_url = saved.base_url.clone();
+            // Restore saved settings or fill defaults
+            if let Some(saved) = self.provider_history.get(&dialog.provider) {
+                dialog.model = saved.model.clone();
+                dialog.api_key_env = saved.api_key_env.clone();
+                dialog.api_key = saved.api_key.clone();
+                dialog.base_url = saved.base_url.clone();
+            } else {
+                let (env, url) = Self::provider_defaults(&dialog.provider);
+                dialog.api_key_env = env.to_string();
+                dialog.base_url = url.to_string();
+                dialog.api_key = if !env.is_empty() {
+                    std::env::var(env).unwrap_or_default()
                 } else {
-                    let (env, url) = Self::provider_defaults(&dialog.provider);
-                    dialog.api_key_env = env.to_string();
-                    dialog.base_url = url.to_string();
-                    dialog.api_key = if !env.is_empty() {
-                        std::env::var(env).unwrap_or_default()
-                    } else {
-                        String::new()
-                    };
-                    dialog.model =
-                        Self::default_model_for_provider(&dialog.provider).to_string();
-                }
+                    String::new()
+                };
+                dialog.model = Self::default_model_for_provider(&dialog.provider).to_string();
             }
         }
 
@@ -701,33 +697,34 @@ impl GuiApp {
                 d.test_status = Some(TestConnectionStatus::Testing);
             }
             // Set the env var so the test connection can read it
-            if let Some(d) = &self.settings_dialog {
-                if !d.api_key_env.is_empty() && !d.api_key.is_empty() {
-                    // SAFETY: required unsafe in edition 2024
-                    unsafe {
-                        std::env::set_var(&d.api_key_env, &d.api_key);
-                    }
+            if let Some(d) = &self.settings_dialog
+                && !d.api_key_env.is_empty()
+                && !d.api_key.is_empty()
+            {
+                // SAFETY: required unsafe in edition 2024
+                unsafe {
+                    std::env::set_var(&d.api_key_env, &d.api_key);
                 }
             }
             // Build a config from the dialog so the agent tests the NEW settings
-            if let (Some(d), Some(domain)) = (&self.settings_dialog, &self.domain) {
-                if let Ok(proj) = domain.try_lock() {
-                    let mut test_cfg = proj.config.clone();
-                    test_cfg.llm.provider = d.provider.clone();
-                    test_cfg.llm.model = d.model.clone();
-                    test_cfg.llm.api_key_env = if d.api_key_env.is_empty() {
-                        None
-                    } else {
-                        Some(d.api_key_env.clone())
-                    };
-                    test_cfg.llm.base_url = if d.base_url.is_empty() {
-                        None
-                    } else {
-                        Some(d.base_url.clone())
-                    };
-                    if let Some(tx) = &self.gui_tx {
-                        let _ = tx.send(GuiRequest::TestConnection(test_cfg));
-                    }
+            if let (Some(d), Some(domain)) = (&self.settings_dialog, &self.domain)
+                && let Ok(proj) = domain.try_lock()
+            {
+                let mut test_cfg = proj.config.clone();
+                test_cfg.llm.provider = d.provider.clone();
+                test_cfg.llm.model = d.model.clone();
+                test_cfg.llm.api_key_env = if d.api_key_env.is_empty() {
+                    None
+                } else {
+                    Some(d.api_key_env.clone())
+                };
+                test_cfg.llm.base_url = if d.base_url.is_empty() {
+                    None
+                } else {
+                    Some(d.base_url.clone())
+                };
+                if let Some(tx) = &self.gui_tx {
+                    let _ = tx.send(GuiRequest::TestConnection(test_cfg));
                 }
             }
             return;
@@ -753,19 +750,19 @@ impl GuiApp {
         }
 
         // 2. Persist to .env file and ensure .gitignore
-        if let Some(domain) = &self.domain {
-            if let Ok(proj) = domain.try_lock() {
-                let env_path = proj.project_root.join(".env");
-                if !dialog.api_key_env.is_empty() && !dialog.api_key.is_empty() {
-                    if let Err(e) =
-                        config::write_env_file(&env_path, &dialog.api_key_env, &dialog.api_key)
-                    {
-                        eprintln!("Warning: could not write .env: {e}");
-                    }
-                }
-                if let Err(e) = config::ensure_gitignore_has_dotenv(&proj.project_root) {
-                    eprintln!("Warning: could not update .gitignore: {e}");
-                }
+        if let Some(domain) = &self.domain
+            && let Ok(proj) = domain.try_lock()
+        {
+            let env_path = proj.project_root.join(".env");
+            if !dialog.api_key_env.is_empty()
+                && !dialog.api_key.is_empty()
+                && let Err(e) =
+                    config::write_env_file(&env_path, &dialog.api_key_env, &dialog.api_key)
+            {
+                eprintln!("Warning: could not write .env: {e}");
+            }
+            if let Err(e) = config::ensure_gitignore_has_dotenv(&proj.project_root) {
+                eprintln!("Warning: could not update .gitignore: {e}");
             }
         }
 
@@ -851,10 +848,10 @@ impl GuiApp {
                 self.gui_rx = Some(rx_from_agent);
 
                 // Build snapshot
-                if let Some(d) = &self.domain {
-                    if let Ok(proj) = d.try_lock() {
-                        self.snapshot = Some(build_snapshot(&proj));
-                    }
+                if let Some(d) = &self.domain
+                    && let Ok(proj) = d.try_lock()
+                {
+                    self.snapshot = Some(build_snapshot(&proj));
                 }
 
                 // Reset GUI state for the new project
@@ -1461,7 +1458,6 @@ fn build_snapshot(proj: &ProjectData) -> ProjectSnapshot {
                     } => (
                         name.clone(),
                         NodeDetail::Character {
-                            name: name.clone(),
                             aliases: aliases.clone(),
                             description: description.clone(),
                         },
@@ -1506,7 +1502,6 @@ fn build_snapshot(proj: &ProjectData) -> ProjectSnapshot {
                         (
                             label,
                             NodeDetail::Scene {
-                                title: title.clone(),
                                 summary: summary.clone(),
                                 characters_present: characters_present.clone(),
                                 location: location.clone(),
@@ -1594,7 +1589,6 @@ fn build_snapshot(proj: &ProjectData) -> ProjectSnapshot {
             .filter(|b| !b.is_empty())
             .map(|b| b.to_markdown())
             .unwrap_or_default(),
-        preview_available: true, // determined per-file in canvas render
     }
 }
 
@@ -1673,21 +1667,23 @@ pub async fn run_gui(project_path: Option<PathBuf>) -> anyhow::Result<()> {
                 let summary = load_result.summary;
                 let title = data.config.project.title.clone();
                 let mode = infer_session_mode(&data.config, data.manifest.as_ref());
-                let mut gs = GuiState::default();
-                gs.app_mode = AppMode::Project;
-                gs.session_mode = mode;
-                gs.project_title = title.clone();
-                gs.privacy_label = summary.privacy_label;
-                gs.model_name = summary.model_name.clone();
-                gs.scene_count = summary.scene_count;
-                gs.char_count = summary.char_count;
-                gs.word_count = summary.word_count;
-                gs.context_window_max = state::context_window_for_model(&summary.model_name);
-                gs.chat_history = vec![ChatMessage {
-                    role: ChatRole::System,
-                    content: "Welcome to Laires. Ask me anything about your story.".to_string(),
-                    tool_calls: Vec::new(),
-                }];
+                let gs = GuiState {
+                    app_mode: AppMode::Project,
+                    session_mode: mode,
+                    project_title: title.clone(),
+                    privacy_label: summary.privacy_label,
+                    model_name: summary.model_name.clone(),
+                    scene_count: summary.scene_count,
+                    char_count: summary.char_count,
+                    word_count: summary.word_count,
+                    context_window_max: state::context_window_for_model(&summary.model_name),
+                    chat_history: vec![ChatMessage {
+                        role: ChatRole::System,
+                        content: "Welcome to Laires. Ask me anything about your story.".to_string(),
+                        tool_calls: Vec::new(),
+                    }],
+                    ..GuiState::default()
+                };
 
                 let domain = Arc::new(Mutex::new(data));
 

@@ -149,6 +149,7 @@ fn render_character(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_objective(
     ui: &mut egui::Ui,
     character_id: &str,
@@ -245,6 +246,7 @@ fn render_objective(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_scene(
     ui: &mut egui::Ui,
     summary: &str,

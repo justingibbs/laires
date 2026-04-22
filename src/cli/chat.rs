@@ -131,7 +131,7 @@ pub async fn run(new_session: bool) -> anyhow::Result<()> {
             project_root: &project_root,
         };
 
-        print!("\n");
+        println!();
         match session
             .run_prepared_turn(
                 &mut provider,
@@ -203,10 +203,10 @@ pub async fn run(new_session: bool) -> anyhow::Result<()> {
     }
 
     // Persist chat history
-    if let Ok(json) = serde_json::to_string_pretty(session.history()) {
-        if let Err(e) = std::fs::write(&history_path, json) {
-            eprintln!("Warning: failed to save chat history: {e}");
-        }
+    if let Ok(json) = serde_json::to_string_pretty(session.history())
+        && let Err(e) = std::fs::write(&history_path, json)
+    {
+        eprintln!("Warning: failed to save chat history: {e}");
     }
 
     // Persist perspectives cache
@@ -252,15 +252,15 @@ async fn execute_chat_tool_calls(
         });
     }
 
-    if let Some(fbm) = runtime.file_buffer_manager.as_deref_mut() {
-        if let Err(e) = fbm.save_dirty() {
-            eprintln!("Warning: failed to save story file(s): {e}");
-        }
+    if let Some(fbm) = runtime.file_buffer_manager.as_deref_mut()
+        && let Err(e) = fbm.save_dirty()
+    {
+        eprintln!("Warning: failed to save story file(s): {e}");
     }
-    if runtime.text_buffer.is_dirty() {
-        if let Err(e) = runtime.text_buffer.save() {
-            eprintln!("Warning: failed to save story file: {e}");
-        }
+    if runtime.text_buffer.is_dirty()
+        && let Err(e) = runtime.text_buffer.save()
+    {
+        eprintln!("Warning: failed to save story file: {e}");
     }
 
     tool_results

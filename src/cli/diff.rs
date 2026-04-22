@@ -251,14 +251,14 @@ fn scene_word_count_deltas(old: &NarrativeGraph, new: &NarrativeGraph) -> Vec<St
 
     // Check removed scenes
     for (&id, &old_node) in &old_scenes {
-        if !new_scenes.contains_key(id) {
-            if let GraphNode::Scene { title, summary, .. } = old_node {
-                let old_words = summary.split_whitespace().count();
-                let label = title.as_deref().unwrap_or("(untitled)");
-                lines.push(format!(
-                    "  Scene \"{label}\" (id: {id:.8}): -{old_words} words (removed)"
-                ));
-            }
+        if !new_scenes.contains_key(id)
+            && let GraphNode::Scene { title, summary, .. } = old_node
+        {
+            let old_words = summary.split_whitespace().count();
+            let label = title.as_deref().unwrap_or("(untitled)");
+            lines.push(format!(
+                "  Scene \"{label}\" (id: {id:.8}): -{old_words} words (removed)"
+            ));
         }
     }
 

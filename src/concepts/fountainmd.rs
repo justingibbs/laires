@@ -37,9 +37,8 @@ pub enum FountainMdElement {
 // Compiled regexes (built once)
 // ---------------------------------------------------------------------------
 
-static RE_SCENE_HEADING: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^(INT\.|EXT\.|INT\./EXT\.|I/E\.|EST\.)[\t ]+(.+)$").unwrap()
-});
+static RE_SCENE_HEADING: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^(INT\.|EXT\.|INT\./EXT\.|I/E\.|EST\.)[\t ]+(.+)$").unwrap());
 
 static RE_FORCED_SCENE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\.([A-Za-z].*)$").unwrap());
@@ -47,28 +46,22 @@ static RE_FORCED_SCENE: LazyLock<Regex> =
 static RE_TRANSITION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[A-Z][A-Z0-9 ]*TO:$").unwrap());
 
-static RE_FORCED_TRANSITION: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^>\s*(.+)$").unwrap());
+static RE_FORCED_TRANSITION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^>\s*(.+)$").unwrap());
 
 static RE_CHARACTER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^([A-Z][A-Z0-9 .'\-]{1,})(?:\s*\((?:V\.?O\.?|O\.?S\.?|CONT'?D?|O\.?C\.?)\))?$")
         .unwrap()
 });
 
-static RE_FORCED_CHARACTER: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^@(.+)$").unwrap());
+static RE_FORCED_CHARACTER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^@(.+)$").unwrap());
 
-static RE_PARENTHETICAL: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\(.*\)$").unwrap());
+static RE_PARENTHETICAL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\(.*\)$").unwrap());
 
-static RE_HEADING: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(#{1,3})\s+(.+)$").unwrap());
+static RE_HEADING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(#{1,3})\s+(.+)$").unwrap());
 
-static RE_SYNOPSIS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^=\s+(.+)$").unwrap());
+static RE_SYNOPSIS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^=\s+(.+)$").unwrap());
 
-static RE_LYRIC: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^~(.+)$").unwrap());
+static RE_LYRIC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^~(.+)$").unwrap());
 
 static RE_TITLE_KV: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^([A-Za-z][A-Za-z ]*):(.*)$").unwrap());
@@ -86,11 +79,10 @@ pub fn parse(text: &str) -> Vec<FountainMdElement> {
     let lines: Vec<&str> = text.lines().collect();
     let len = lines.len();
     let mut elements = Vec::new();
-    let mut i = 0;
+    let mut i = parse_yaml_front_matter(&lines, &mut elements);
 
     // -- Front matter / title page detection at document start --
     // Try YAML front matter first (---fenced), then Fountain-style (bare key-value).
-    i = parse_yaml_front_matter(&lines, &mut elements);
     if i == 0 {
         i = parse_title_page(&lines, &mut elements);
     }
@@ -160,8 +152,13 @@ pub fn parse(text: &str) -> Vec<FountainMdElement> {
         if let Some(caps) = RE_FORCED_TRANSITION.captures(trimmed) {
             let inner = caps[1].trim();
             // If it looks like a transition (uppercase, often ends in TO:), treat as transition
-            if inner.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_whitespace() || c == ':' || c == '.' || c == '-')
-                && inner.len() > 1
+            if inner.chars().all(|c| {
+                c.is_ascii_uppercase()
+                    || c.is_ascii_whitespace()
+                    || c == ':'
+                    || c == '.'
+                    || c == '-'
+            }) && inner.len() > 1
             {
                 elements.push(FountainMdElement::Transition(inner.to_string()));
                 i += 1;
@@ -351,7 +348,8 @@ mod tests {
 
     #[test]
     fn pure_markdown() {
-        let text = "# Chapter One\n\nThis is a paragraph.\n\n## Section Two\n\nAnother paragraph here.";
+        let text =
+            "# Chapter One\n\nThis is a paragraph.\n\n## Section Two\n\nAnother paragraph here.";
         let elements = parse(text);
 
         assert_eq!(
@@ -426,7 +424,10 @@ I almost didn't.";
         let elements = parse(text);
 
         // Check key elements are in the right order
-        assert!(matches!(elements[0], FountainMdElement::Heading { level: 1, .. }));
+        assert!(matches!(
+            elements[0],
+            FountainMdElement::Heading { level: 1, .. }
+        ));
         assert!(matches!(elements[2], FountainMdElement::Synopsis(_)));
         assert!(matches!(elements[4], FountainMdElement::SceneHeading(_)));
         assert!(matches!(elements[6], FountainMdElement::Paragraph(_)));
@@ -454,7 +455,10 @@ I almost didn't.";
     fn forced_scene_heading() {
         let text = ".FLASHBACK\n\nSome action.";
         let elements = parse(text);
-        assert_eq!(elements[0], FountainMdElement::SceneHeading("FLASHBACK".to_string()));
+        assert_eq!(
+            elements[0],
+            FountainMdElement::SceneHeading("FLASHBACK".to_string())
+        );
     }
 
     #[test]
@@ -496,7 +500,11 @@ I almost didn't.";
     fn page_break() {
         let text = "Some text.\n\n===\n\nMore text.";
         let elements = parse(text);
-        assert!(elements.iter().any(|e| matches!(e, FountainMdElement::PageBreak)));
+        assert!(
+            elements
+                .iter()
+                .any(|e| matches!(e, FountainMdElement::PageBreak))
+        );
     }
 
     #[test]
@@ -508,7 +516,8 @@ I almost didn't.";
 
     #[test]
     fn yaml_front_matter() {
-        let text = "---\ntitle: \"test-new-2\"\nauthor: Jane Smith\n---\n\n# Chapter One\n\nSome text.";
+        let text =
+            "---\ntitle: \"test-new-2\"\nauthor: Jane Smith\n---\n\n# Chapter One\n\nSome text.";
         let elements = parse(text);
         // First element should be TitlePage with 2 pairs
         assert!(
@@ -539,7 +548,10 @@ I almost didn't.";
         let has_title = elements
             .iter()
             .any(|e| matches!(e, FountainMdElement::TitlePage(_)));
-        assert!(!has_title, "Should not detect title page without closing ---");
+        assert!(
+            !has_title,
+            "Should not detect title page without closing ---"
+        );
     }
 
     #[test]
@@ -562,7 +574,10 @@ I almost didn't.";
         let has_char = elements
             .iter()
             .any(|e| matches!(e, FountainMdElement::Character(_)));
-        assert!(!has_char, "Should not detect character cue without following dialogue");
+        assert!(
+            !has_char,
+            "Should not detect character cue without following dialogue"
+        );
     }
 
     #[test]
