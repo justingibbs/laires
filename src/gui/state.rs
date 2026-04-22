@@ -360,6 +360,34 @@ impl Default for GuiState {
     }
 }
 
+/// Estimate the context window size (in tokens) for known model families.
+pub fn context_window_for_model(model: &str) -> u64 {
+    let m = model.to_lowercase();
+    if m.contains("gemini-2") {
+        1_048_576
+    } else if m.contains("gemini-1.5-pro") {
+        2_097_152
+    } else if m.contains("gemini-1.5") {
+        1_048_576
+    } else if m.contains("claude") {
+        200_000
+    } else if m.contains("gpt-4o")
+        || m.contains("gpt-4-turbo")
+        || m.contains("o1")
+        || m.contains("o3")
+    {
+        128_000
+    } else if m.contains("gpt-3.5") {
+        16_385
+    } else if m.contains("llama") {
+        128_000
+    } else if m.contains("mistral") {
+        32_768
+    } else {
+        128_000
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,33 +416,5 @@ mod tests {
 
         assert_eq!(scope.summary(), "Review pending");
         assert!(scope.is_empty());
-    }
-}
-
-/// Estimate the context window size (in tokens) for known model families.
-pub fn context_window_for_model(model: &str) -> u64 {
-    let m = model.to_lowercase();
-    if m.contains("gemini-2") {
-        1_048_576
-    } else if m.contains("gemini-1.5-pro") {
-        2_097_152
-    } else if m.contains("gemini-1.5") {
-        1_048_576
-    } else if m.contains("claude") {
-        200_000
-    } else if m.contains("gpt-4o")
-        || m.contains("gpt-4-turbo")
-        || m.contains("o1")
-        || m.contains("o3")
-    {
-        128_000
-    } else if m.contains("gpt-3.5") {
-        16_385
-    } else if m.contains("llama") {
-        128_000
-    } else if m.contains("mistral") {
-        32_768
-    } else {
-        128_000
     }
 }

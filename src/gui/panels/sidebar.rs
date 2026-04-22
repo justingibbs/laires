@@ -294,11 +294,7 @@ fn render_scene_row(
     }
 
     // Scene label
-    let text_color = if is_selected {
-        theme.text_primary
-    } else {
-        theme.text_primary
-    };
+    let text_color = theme.text_primary;
     let text_pos = egui::pos2(rect.min.x + LEFT_PAD + 4.0, rect.center().y);
     painter.text(
         text_pos,

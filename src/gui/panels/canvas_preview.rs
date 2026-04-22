@@ -204,11 +204,7 @@ fn render_page_break(ui: &mut egui::Ui, theme: &LairesTheme) {
     ui.allocate_space(Vec2::new(rect.width(), 3.0));
 }
 
-fn render_title_page(
-    ui: &mut egui::Ui,
-    pairs: &[(String, String)],
-    theme: &LairesTheme,
-) {
+fn render_title_page(ui: &mut egui::Ui, pairs: &[(String, String)], theme: &LairesTheme) {
     ui.add_space(24.0);
 
     for (key, value) in pairs {
@@ -351,10 +347,7 @@ fn parse_inline_spans(text: &str) -> Vec<InlineSpan> {
     // Explicit alternations — Rust regex crate has no backreferences.
     // Order matters: longest delimiters first.
     static RE_INLINE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"\*{3}(.+?)\*{3}|__(.+?)__|(\*{2})(.+?)\*{2}|(\*)(.+?)\*|(_)(.+?)_"
-        )
-        .unwrap()
+        Regex::new(r"\*{3}(.+?)\*{3}|__(.+?)__|(\*{2})(.+?)\*{2}|(\*)(.+?)\*|(_)(.+?)_").unwrap()
     });
 
     let mut spans = Vec::new();

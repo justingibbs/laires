@@ -45,7 +45,7 @@ pub fn render(
                 // Wide: side by side
                 let graph_w = available_w * 0.58;
                 let overview_w = available_w - graph_w - 12.0;
-                let row_h = ui.available_height().min(360.0).max(200.0);
+                let row_h = ui.available_height().clamp(200.0, 360.0);
 
                 ui.horizontal(|ui| {
                     ui.allocate_ui_with_layout(

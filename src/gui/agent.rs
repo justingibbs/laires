@@ -13,9 +13,7 @@ use crate::concepts::provider::{Message, Provider, Role, ToolCall, ToolResult};
 use crate::concepts::skills::{SkillContext, SkillSetContext, Skills};
 use crate::config::LAIRES_DIR;
 use crate::gui::ProjectData;
-use crate::gui::state::{
-    AgentEvent, GuiRequest, SessionMode, StoryChangeReason, StoryChangeScope,
-};
+use crate::gui::state::{AgentEvent, GuiRequest, SessionMode, StoryChangeReason, StoryChangeScope};
 use crate::runtime::agent_session::{
     AgentSession, ChatTurnError, ChatTurnRequest, SessionEvent, truncate_json,
 };
@@ -252,14 +250,15 @@ pub async fn agent_loop(
                 let _ = events.send(AgentEvent::Thinking);
                 // Build a temporary provider from the test config to validate
                 // the new settings, not the current agent provider.
-                let result = crate::concepts::provider::Provider::from_project_config(
-                    &test_config,
-                );
+                let result = crate::concepts::provider::Provider::from_project_config(&test_config);
                 let (success, message) = match result {
                     Ok(mut test_provider) => {
                         let ok = test_provider.test_connection().await;
                         if ok {
-                            (true, format!("Connected to {} successfully", test_provider.model_name()))
+                            (
+                                true,
+                                format!("Connected to {} successfully", test_provider.model_name()),
+                            )
                         } else {
                             let msg = match test_provider.connection_status() {
                                 crate::concepts::provider::ConnectionStatus::Error(e) => {
@@ -279,20 +278,19 @@ pub async fn agent_loop(
                 // Auto-save brief if there are pending revisions
                 {
                     let mut guard = domain.lock().await;
-                    if let Some(ref brief) = guard.revision_brief {
-                        if !brief.is_empty() {
-                            match brief.save_to_project(&guard.project_root) {
-                                Ok(path) => {
-                                    let _ = events.send(AgentEvent::Response(format!(
-                                        "Revision brief saved to `{}`.",
-                                        path.display()
-                                    )));
-                                }
-                                Err(e) => {
-                                    let _ = events.send(AgentEvent::Error(format!(
-                                        "Failed to save brief: {e}"
-                                    )));
-                                }
+                    if let Some(ref brief) = guard.revision_brief
+                        && !brief.is_empty()
+                    {
+                        match brief.save_to_project(&guard.project_root) {
+                            Ok(path) => {
+                                let _ = events.send(AgentEvent::Response(format!(
+                                    "Revision brief saved to `{}`.",
+                                    path.display()
+                                )));
+                            }
+                            Err(e) => {
+                                let _ = events
+                                    .send(AgentEvent::Error(format!("Failed to save brief: {e}")));
                             }
                         }
                     }
@@ -775,7 +773,7 @@ async fn run_scan_single_buffer(
     d.graph.save(graph_path)?;
     let file_path_str = d.text_buffer.file_path().to_string_lossy().to_string();
     let rel_path = file_path_str
-        .strip_prefix(&d.project_root.to_string_lossy().as_ref())
+        .strip_prefix(d.project_root.to_string_lossy().as_ref())
         .unwrap_or(&file_path_str)
         .trim_start_matches('/')
         .to_string();
@@ -843,13 +841,16 @@ fn run_create_file(d: &mut ProjectData, args: &serde_json::Value) -> serde_json:
 
     // Determine format for story files
     let format = if is_story {
-        args["format"].as_str().map(String::from).unwrap_or_else(|| {
-            if lower.ends_with(".fountain") {
-                "fountain".to_string()
-            } else {
-                "prose".to_string()
-            }
-        })
+        args["format"]
+            .as_str()
+            .map(String::from)
+            .unwrap_or_else(|| {
+                if lower.ends_with(".fountain") {
+                    "fountain".to_string()
+                } else {
+                    "prose".to_string()
+                }
+            })
     } else {
         "prose".to_string()
     };
@@ -864,12 +865,12 @@ fn run_create_file(d: &mut ProjectData, args: &serde_json::Value) -> serde_json:
     }
 
     // Create parent directories if needed
-    if let Some(parent) = abs_path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            return serde_json::json!({
-                "error": format!("Failed to create directory: {}", e)
-            });
-        }
+    if let Some(parent) = abs_path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        return serde_json::json!({
+            "error": format!("Failed to create directory: {}", e)
+        });
     }
 
     // Write the file
@@ -882,8 +883,9 @@ fn run_create_file(d: &mut ProjectData, args: &serde_json::Value) -> serde_json:
     let content_hash = blake3::hash(content.as_bytes()).to_hex().to_string();
 
     // Update manifest
-    let manifest = d.manifest.get_or_insert_with(|| {
-        crate::concepts::manifest::Manifest {
+    let manifest = d
+        .manifest
+        .get_or_insert_with(|| crate::concepts::manifest::Manifest {
             meta: crate::concepts::manifest::ManifestMeta {
                 last_scan: chrono::Utc::now().to_rfc3339(),
                 classification_model: "user-created".to_string(),
@@ -891,8 +893,7 @@ fn run_create_file(d: &mut ProjectData, args: &serde_json::Value) -> serde_json:
             story_files: Vec::new(),
             context_files: Vec::new(),
             excluded: Vec::new(),
-        }
-    });
+        });
 
     if is_story {
         let next_order = manifest
@@ -902,19 +903,19 @@ fn run_create_file(d: &mut ProjectData, args: &serde_json::Value) -> serde_json:
             .max()
             .unwrap_or(0)
             + 1;
-        manifest.story_files.push(crate::concepts::manifest::StoryFile {
-            path: file.to_string(),
-            format: format.clone(),
-            order: next_order,
-            content_hash,
-            editable: crate::concepts::manifest::StoryFile::infer_editable(file),
-        });
+        manifest
+            .story_files
+            .push(crate::concepts::manifest::StoryFile {
+                path: file.to_string(),
+                format: format.clone(),
+                order: next_order,
+                content_hash,
+                editable: crate::concepts::manifest::StoryFile::infer_editable(file),
+            });
 
         // Add to FileBufferManager
         let text_buffer = crate::concepts::text_buffer::TextBuffer::from_file(abs_path.clone())
-            .unwrap_or_else(|_| {
-                crate::concepts::text_buffer::TextBuffer::new(abs_path)
-            });
+            .unwrap_or_else(|_| crate::concepts::text_buffer::TextBuffer::new(abs_path));
         let full_text = text_buffer.read_all();
         let parse_mode = if format == "fountain" {
             crate::concepts::scene_map::ParseMode::Fountain
@@ -935,20 +936,19 @@ fn run_create_file(d: &mut ProjectData, args: &serde_json::Value) -> serde_json:
         };
 
         let fbm = d.file_buffer_manager.get_or_insert_with(|| {
-            FileBufferManager::from_manifest(manifest, &d.project_root)
-                .unwrap_or_else(|_| {
-                    // Fallback: empty FBM — the entry we're about to add will populate it.
-                    FileBufferManager::from_manifest(
-                        &crate::concepts::manifest::Manifest {
-                            meta: manifest.meta.clone(),
-                            story_files: Vec::new(),
-                            context_files: Vec::new(),
-                            excluded: Vec::new(),
-                        },
-                        &d.project_root,
-                    )
-                    .unwrap()
-                })
+            FileBufferManager::from_manifest(manifest, &d.project_root).unwrap_or_else(|_| {
+                // Fallback: empty FBM — the entry we're about to add will populate it.
+                FileBufferManager::from_manifest(
+                    &crate::concepts::manifest::Manifest {
+                        meta: manifest.meta.clone(),
+                        story_files: Vec::new(),
+                        context_files: Vec::new(),
+                        excluded: Vec::new(),
+                    },
+                    &d.project_root,
+                )
+                .unwrap()
+            })
         });
         fbm.add_entry(entry);
     } else {
@@ -1036,19 +1036,19 @@ async fn execute_gui_tool_calls(
         });
     }
 
-    if let Some(fbm) = d.file_buffer_manager.as_mut() {
-        if let Err(e) = fbm.save_dirty() {
-            let _ = runtime
-                .events
-                .send(AgentEvent::Error(format!("Failed to save: {e}")));
-        }
+    if let Some(fbm) = d.file_buffer_manager.as_mut()
+        && let Err(e) = fbm.save_dirty()
+    {
+        let _ = runtime
+            .events
+            .send(AgentEvent::Error(format!("Failed to save: {e}")));
     }
-    if d.text_buffer.is_dirty() {
-        if let Err(e) = d.text_buffer.save() {
-            let _ = runtime
-                .events
-                .send(AgentEvent::Error(format!("Failed to save: {e}")));
-        }
+    if d.text_buffer.is_dirty()
+        && let Err(e) = d.text_buffer.save()
+    {
+        let _ = runtime
+            .events
+            .send(AgentEvent::Error(format!("Failed to save: {e}")));
     }
 
     let _ = runtime.events.send(AgentEvent::StateChanged);

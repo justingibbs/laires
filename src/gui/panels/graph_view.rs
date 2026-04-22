@@ -145,7 +145,6 @@ impl GraphLayoutState {
 #[derive(Clone)]
 pub enum NodeDetail {
     Character {
-        name: String,
         aliases: Vec<String>,
         description: Option<String>,
     },
@@ -158,7 +157,6 @@ pub enum NodeDetail {
         status: String,
     },
     Scene {
-        title: Option<String>,
         summary: String,
         characters_present: Vec<String>,
         location: Option<String>,
@@ -374,12 +372,11 @@ pub fn render(
 
             // Click detection
             let node_rect = Rect::from_center_size(screen_pos, Vec2::splat(r * 2.0));
-            if response.clicked() {
-                if let Some(click_pos) = response.interact_pointer_pos() {
-                    if node_rect.contains(click_pos) {
-                        clicked_node = Some(i);
-                    }
-                }
+            if response.clicked()
+                && let Some(click_pos) = response.interact_pointer_pos()
+                && node_rect.contains(click_pos)
+            {
+                clicked_node = Some(i);
             }
         }
 

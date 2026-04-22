@@ -18,16 +18,16 @@ pub fn detect_divergences(graph: &NarrativeGraph, intent: &DeclaredIntent) -> Ve
     let mut divergences = Vec::new();
 
     for (key, decl) in intent.list_declarations() {
-        if let Some(inferred) = graph.get_node_field(&key.node_id, &key.field) {
-            if inferred != decl.value {
-                divergences.push(Divergence {
-                    node_id: key.node_id.clone(),
-                    field: key.field.clone(),
-                    inferred,
-                    declared: decl.value.clone(),
-                    rationale: decl.rationale.clone(),
-                });
-            }
+        if let Some(inferred) = graph.get_node_field(&key.node_id, &key.field)
+            && inferred != decl.value
+        {
+            divergences.push(Divergence {
+                node_id: key.node_id.clone(),
+                field: key.field.clone(),
+                inferred,
+                declared: decl.value.clone(),
+                rationale: decl.rationale.clone(),
+            });
         }
     }
 

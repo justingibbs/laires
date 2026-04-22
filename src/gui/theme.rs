@@ -124,8 +124,10 @@ impl LairesTheme {
 
         visuals.window_corner_radius = CornerRadius::same(12);
 
-        let mut style = Style::default();
-        style.visuals = visuals;
+        let mut style = Style {
+            visuals,
+            ..Style::default()
+        };
 
         // More breathable spacing
         style.spacing.item_spacing = egui::vec2(8.0, 8.0);

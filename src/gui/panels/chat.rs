@@ -300,8 +300,7 @@ fn render_message(
                 .inner_margin(egui::Margin::symmetric(12, 8))
                 .show(ui, |ui| {
                     ui.set_max_width((ui.available_width() - 8.0).max(0.0));
-                    egui_commonmark::CommonMarkViewer::new()
-                        .show(ui, md_cache, &msg.content);
+                    egui_commonmark::CommonMarkViewer::new().show(ui, md_cache, &msg.content);
                 });
         });
     }

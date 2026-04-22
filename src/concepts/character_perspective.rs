@@ -181,10 +181,9 @@ impl CharacterPerspective {
                 characters_present,
                 ..
             } = scene_node
+                && characters_present.contains(&character_id.to_string())
             {
-                if characters_present.contains(&character_id.to_string()) {
-                    boundary.insert(id.clone());
-                }
+                boundary.insert(id.clone());
             }
         }
         boundary
@@ -460,14 +459,13 @@ impl CharacterPerspective {
                 summary,
                 ..
             } = scene_node
+                && !characters_present.contains(&character_id.to_string())
             {
-                if !characters_present.contains(&character_id.to_string()) {
-                    let title_str = title.as_deref().unwrap_or("(untitled)");
-                    unseen_scenes.push(format!(
-                        "Scene \"{title_str}\" ({id}) [present: {}]:\n{summary}",
-                        characters_present.join(", ")
-                    ));
-                }
+                let title_str = title.as_deref().unwrap_or("(untitled)");
+                unseen_scenes.push(format!(
+                    "Scene \"{title_str}\" ({id}) [present: {}]:\n{summary}",
+                    characters_present.join(", ")
+                ));
             }
         }
 
@@ -848,14 +846,13 @@ mod tests {
                 summary,
                 ..
             } = scene_node
+                && !characters_present.contains(&character_id.to_string())
             {
-                if !characters_present.contains(&character_id.to_string()) {
-                    let title_str = title.as_deref().unwrap_or("(untitled)");
-                    unseen_scenes.push(format!(
-                        "Scene \"{title_str}\" ({id}) [present: {}]:\n{summary}",
-                        characters_present.join(", ")
-                    ));
-                }
+                let title_str = title.as_deref().unwrap_or("(untitled)");
+                unseen_scenes.push(format!(
+                    "Scene \"{title_str}\" ({id}) [present: {}]:\n{summary}",
+                    characters_present.join(", ")
+                ));
             }
         }
 

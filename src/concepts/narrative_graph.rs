@@ -325,33 +325,32 @@ impl NarrativeGraph {
                 status,
                 ..
             } = node
+                && cid == character_id
             {
-                if cid == character_id {
-                    // Find scenes this objective is active in via edges
-                    let obj_idx = self.index_map.get(id.as_str());
-                    if let Some(&idx) = obj_idx {
-                        // Check for Advances/Blocks edges pointing to this objective
-                        for edge_ref in self.graph.edges_directed(idx, Direction::Incoming) {
-                            let source = &self.graph[edge_ref.source()];
-                            if let GraphNode::Scene { id: scene_id, .. } = source {
-                                arc.push(ObjectiveState {
-                                    scene_id: scene_id.clone(),
-                                    objective_id: id.clone(),
-                                    description: description.clone(),
-                                    status: *status,
-                                });
-                            }
-                        }
-
-                        // If no scene edges, still record the objective
-                        if arc.iter().all(|a| a.objective_id != *id) {
+                // Find scenes this objective is active in via edges
+                let obj_idx = self.index_map.get(id.as_str());
+                if let Some(&idx) = obj_idx {
+                    // Check for Advances/Blocks edges pointing to this objective
+                    for edge_ref in self.graph.edges_directed(idx, Direction::Incoming) {
+                        let source = &self.graph[edge_ref.source()];
+                        if let GraphNode::Scene { id: scene_id, .. } = source {
                             arc.push(ObjectiveState {
-                                scene_id: String::new(),
+                                scene_id: scene_id.clone(),
                                 objective_id: id.clone(),
                                 description: description.clone(),
                                 status: *status,
                             });
                         }
+                    }
+
+                    // If no scene edges, still record the objective
+                    if arc.iter().all(|a| a.objective_id != *id) {
+                        arc.push(ObjectiveState {
+                            scene_id: String::new(),
+                            objective_id: id.clone(),
+                            description: description.clone(),
+                            status: *status,
+                        });
                     }
                 }
             }
@@ -422,19 +421,15 @@ impl NarrativeGraph {
         for char_id in &characters_present {
             if let Some(&char_idx) = self.index_map.get(char_id.as_str()) {
                 for edge_ref in self.graph.edges_directed(char_idx, Direction::Outgoing) {
-                    if matches!(edge_ref.weight(), GraphEdge::Pursues { .. }) {
-                        if let GraphNode::Objective { id, status, .. } =
+                    if matches!(edge_ref.weight(), GraphEdge::Pursues { .. })
+                        && let GraphNode::Objective { id, status, .. } =
                             &self.graph[edge_ref.target()]
-                        {
-                            if matches!(status, Status::Active)
-                                && !objectives_advanced.contains(id)
-                                && !objectives_blocked.contains(id)
-                            {
-                                if !objectives_active.contains(id) {
-                                    objectives_active.push(id.clone());
-                                }
-                            }
-                        }
+                        && matches!(status, Status::Active)
+                        && !objectives_advanced.contains(id)
+                        && !objectives_blocked.contains(id)
+                        && !objectives_active.contains(id)
+                    {
+                        objectives_active.push(id.clone());
                     }
                 }
             }

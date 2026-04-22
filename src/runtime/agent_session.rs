@@ -176,6 +176,7 @@ impl AgentSession {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn run_prepared_turn<ExecState, ExecTools, OnEvent>(
         &mut self,
         provider: &mut Provider,
